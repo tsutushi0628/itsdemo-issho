@@ -1,0 +1,82 @@
+{
+  "name": "editor-spotlighter",
+  "displayName": "Editor Spotlighter",
+  "description": "フォーカスしたエディタカラムが自動で広がり、他が縮む。画面サイズに応じてアクティブカラム数も自動調整。",
+  "publisher": "tsukamoto",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Editor Spotlighter",
+      "properties": {
+        "editorSpotlighter.totalColumns": {
+          "type": "number",
+          "default": 4,
+          "description": "総カラム数"
+        },
+        "editorSpotlighter.activeColumns": {
+          "type": "number",
+          "default": 4,
+          "description": "同時にアクティブにするカラム数（画面が広いときは全部アクティブ）"
+        },
+        "editorSpotlighter.activeRatio": {
+          "type": "number",
+          "default": 0.35,
+          "description": "アクティブカラムの幅比率"
+        },
+        "editorSpotlighter.inactiveRatio": {
+          "type": "number",
+          "default": 0.1,
+          "description": "非アクティブカラムの幅比率"
+        },
+        "editorSpotlighter.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "有効/無効"
+        },
+        "editorSpotlighter.presets": {
+          "type": "object",
+          "default": {},
+          "description": "解像度別プリセット"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "editorSpotlighter.toggle",
+        "title": "Editor Spotlighter: Toggle"
+      },
+      {
+        "command": "editorSpotlighter.setColumns",
+        "title": "Editor Spotlighter: Set Column Count"
+      },
+      {
+        "command": "editorSpotlighter.resetLayout",
+        "title": "Editor Spotlighter: Reset Layout"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.19.0",
+    "typescript": "^5.3.0",
+    "vitest": "^4.1.0"
+  }
+}
