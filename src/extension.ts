@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { detectResolution } from "./monitorDetector";
 import { resolveActiveColumns, buildPresets } from "./presetManager";
 import { calculateLayout, applyLayout, LayoutConfig } from "./layoutEngine";
+import { TabTreeProvider } from "./tabTreeProvider";
 
 let enabled = true;
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -44,6 +45,10 @@ export async function activate(
 
   const onFocusChange = () => {
     if (!enabled) {
+      return;
+    }
+
+    if (activeColumns >= totalColumns) {
       return;
     }
 
@@ -161,6 +166,52 @@ export async function activate(
     vscode.commands.registerCommand("editorSpotlighter.resetLayout", async () => {
       await resetToEqual(totalColumns);
     })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("editorSpotlighter.alignLayout", async () => {
+      await resetToEqual(totalColumns);
+      vscode.window.showInformationMessage(
+        "Editor Spotlighter: レイアウトを整形しました"
+      );
+    })
+  );
+
+  // TabTreeProvider の登録
+  const tabTreeProvider = new TabTreeProvider();
+  const treeView = vscode.window.createTreeView("editorSpotlighter.tabList", {
+    treeDataProvider: tabTreeProvider,
+  });
+  context.subscriptions.push(treeView);
+
+  context.subscriptions.push(
+    vscode.window.tabGroups.onDidChangeTabs(() => {
+      tabTreeProvider.refresh();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "editorSpotlighter.focusTab",
+      async (uri: vscode.Uri) => {
+        await vscode.window.showTextDocument(uri, { preview: false });
+      }
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "editorSpotlighter.closeTab",
+      async (treeItem: { tab?: vscode.Tab }) => {
+        if (!treeItem.tab) {
+          return;
+        }
+        const input = treeItem.tab.input;
+        if (input instanceof vscode.TabInputText) {
+          await vscode.window.tabGroups.close(treeItem.tab);
+        }
+      }
+    )
   );
 
   context.subscriptions.push(

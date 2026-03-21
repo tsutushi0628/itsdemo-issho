@@ -5,3 +5,7 @@ esbuild.config.mjs
 .gitignore
 *.vsix
 .wasurenagusa/
+.claude
+.spec-workflow/
+.vscode/
+vitest.config.ts

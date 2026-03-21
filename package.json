@@ -15,6 +15,46 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "editorSpotlighter",
+          "title": "Editor Spotlighter",
+          "icon": "$(layout)"
+        }
+      ]
+    },
+    "views": {
+      "editorSpotlighter": [
+        {
+          "id": "editorSpotlighter.tabList",
+          "name": "Tabs"
+        }
+      ]
+    },
+    "menus": {
+      "editor/title": [
+        {
+          "command": "editorSpotlighter.alignLayout",
+          "group": "navigation",
+          "when": "editorIsOpen"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "editorSpotlighter.alignLayout",
+          "when": "view == editorSpotlighter.tabList",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "editorSpotlighter.closeTab",
+          "when": "view == editorSpotlighter.tabList && viewItem == tab",
+          "group": "inline"
+        }
+      ]
+    },
     "configuration": {
       "title": "Editor Spotlighter",
       "properties": {
@@ -76,6 +116,20 @@
       {
         "command": "editorSpotlighter.applyRecommendedSettings",
         "title": "Editor Spotlighter: Apply Recommended Settings"
+      },
+      {
+        "command": "editorSpotlighter.alignLayout",
+        "title": "Align Layout",
+        "icon": "$(layout)"
+      },
+      {
+        "command": "editorSpotlighter.closeTab",
+        "title": "Editor Spotlighter: Close Tab",
+        "icon": "$(close)"
+      },
+      {
+        "command": "editorSpotlighter.focusTab",
+        "title": "Editor Spotlighter: Focus Tab"
       }
     ]
   },
