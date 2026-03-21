@@ -12,6 +12,9 @@ export async function activate(
   const config = vscode.workspace.getConfiguration("editorSpotlighter");
   enabled = config.get<boolean>("enabled", true);
 
+  // activate時にタブ設定を初期反映
+  await applyTabSettings(config);
+
   let totalColumns = config.get<number>("totalColumns", 4);
   let activeRatio = config.get<number>("activeRatio", 0.35);
   let inactiveRatio = config.get<number>("inactiveRatio", 0.1);
@@ -165,6 +168,7 @@ export async function activate(
       "editorSpotlighter.applyRecommendedSettings",
       async () => {
         const workbenchConfig = vscode.workspace.getConfiguration("workbench.editor");
+        const spotlighterConfig = vscode.workspace.getConfiguration("editorSpotlighter");
         try {
           await workbenchConfig.update(
             "openPositioning",
@@ -174,6 +178,17 @@ export async function activate(
           await workbenchConfig.update(
             "enablePreview",
             false,
+            vscode.ConfigurationTarget.Global
+          );
+          // Editor Spotlighter側の設定も一貫性を保つために更新
+          await spotlighterConfig.update(
+            "openTabBesideActive",
+            true,
+            vscode.ConfigurationTarget.Global
+          );
+          await spotlighterConfig.update(
+            "disablePreviewMode",
+            true,
             vscode.ConfigurationTarget.Global
           );
         } catch (error) {
@@ -205,6 +220,23 @@ export async function activate(
         activeColumns = updatedActiveColumns;
       }
 
+      // タブ設定が変更されたらVSCode本体設定を連動書き換え
+      if (
+        e.affectsConfiguration("editorSpotlighter.openTabBesideActive") ||
+        e.affectsConfiguration("editorSpotlighter.disablePreviewMode")
+      ) {
+        (async () => {
+          try {
+            await applyTabSettings(updated);
+          } catch (error) {
+            vscode.window.showErrorMessage(
+              `Editor Spotlighter: タブ設定の適用に失敗しました。(${(error as Error).message})`
+            );
+            throw error;
+          }
+        })();
+      }
+
       onFocusChange();
     })
   );
@@ -230,5 +262,41 @@ async function resetToEqual(totalColumns: number): Promise<void> {
   };
   const layout = calculateLayout(layoutConfig, 0);
   await applyLayout(layout);
+}
+
+async function applyTabSettings(
+  config: vscode.WorkspaceConfiguration
+): Promise<void> {
+  const workbenchConfig = vscode.workspace.getConfiguration("workbench.editor");
+
+  const openTabBesideActive = config.get<boolean>("openTabBesideActive", true);
+  if (openTabBesideActive) {
+    await workbenchConfig.update(
+      "openPositioning",
+      "right",
+      vscode.ConfigurationTarget.Global
+    );
+  } else {
+    await workbenchConfig.update(
+      "openPositioning",
+      "last",
+      vscode.ConfigurationTarget.Global
+    );
+  }
+
+  const disablePreviewMode = config.get<boolean>("disablePreviewMode", false);
+  if (disablePreviewMode) {
+    await workbenchConfig.update(
+      "enablePreview",
+      false,
+      vscode.ConfigurationTarget.Global
+    );
+  } else {
+    await workbenchConfig.update(
+      "enablePreview",
+      true,
+      vscode.ConfigurationTarget.Global
+    );
+  }
 }
 

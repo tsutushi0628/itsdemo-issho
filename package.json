@@ -43,6 +43,16 @@
           "default": true,
           "description": "有効/無効"
         },
+        "editorSpotlighter.openTabBesideActive": {
+          "type": "boolean",
+          "default": true,
+          "description": "新しいタブをアクティブなタブの右隣に開く（VSCodeの workbench.editor.openPositioning を制御）"
+        },
+        "editorSpotlighter.disablePreviewMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "プレビューモードを無効にして常に新しいタブで開く（VSCodeの workbench.editor.enablePreview を制御）"
+        },
         "editorSpotlighter.presets": {
           "type": "object",
           "default": {},
