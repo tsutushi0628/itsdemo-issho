@@ -161,6 +161,35 @@ export async function activate(
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "editorSpotlighter.applyRecommendedSettings",
+      async () => {
+        const workbenchConfig = vscode.workspace.getConfiguration("workbench.editor");
+        try {
+          await workbenchConfig.update(
+            "openPositioning",
+            "right",
+            vscode.ConfigurationTarget.Global
+          );
+          await workbenchConfig.update(
+            "enablePreview",
+            false,
+            vscode.ConfigurationTarget.Global
+          );
+        } catch (error) {
+          vscode.window.showErrorMessage(
+            `Editor Spotlighter: 推奨設定の適用に失敗しました。(${(error as Error).message})`
+          );
+          throw error;
+        }
+        vscode.window.showInformationMessage(
+          "Editor Spotlighter: 推奨設定を適用しました"
+        );
+      }
+    )
+  );
+
+  context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (!e.affectsConfiguration("editorSpotlighter")) {
         return;
