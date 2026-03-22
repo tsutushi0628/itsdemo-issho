@@ -1,11 +1,52 @@
 import * as vscode from "vscode";
-import { detectResolution } from "./monitorDetector";
-import { resolveActiveColumns, buildPresets } from "./presetManager";
+import { detectWindowWidth } from "./windowDetector";
+import {
+  resolveActiveColumns,
+  buildPresets,
+  Preset,
+} from "./presetManager";
 import { calculateLayout, applyLayout, LayoutConfig } from "./layoutEngine";
 import { TabTreeProvider } from "./tabTreeProvider";
 
+const LEARNED_WIDTH_KEY = "learnedComfortableWidths";
+const MAX_LEARNED_ENTRIES = 10;
+
 let enabled = true;
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+let widthDetectTimer: ReturnType<typeof setTimeout> | undefined;
+
+async function recalculateActiveColumns(
+  context: vscode.ExtensionContext,
+  totalColumns: number,
+  configuredActiveColumns: number,
+  presets: Preset[]
+): Promise<number> {
+  if (configuredActiveColumns < totalColumns) {
+    return configuredActiveColumns;
+  }
+
+  const windowWidth = await detectWindowWidth();
+
+  const learnedWidths = context.globalState.get<number[]>(
+    LEARNED_WIDTH_KEY,
+    []
+  );
+
+  if (learnedWidths.length > 0) {
+    let comfortableMinWidth = learnedWidths[0];
+    for (let i = 1; i < learnedWidths.length; i++) {
+      if (learnedWidths[i] < comfortableMinWidth) {
+        comfortableMinWidth = learnedWidths[i];
+      }
+    }
+
+    if (windowWidth >= comfortableMinWidth) {
+      return totalColumns;
+    }
+  }
+
+  return resolveActiveColumns(windowWidth, totalColumns, presets);
+}
 
 export async function activate(
   context: vscode.ExtensionContext
@@ -19,29 +60,52 @@ export async function activate(
   let totalColumns = config.get<number>("totalColumns", 4);
   let activeRatio = config.get<number>("activeRatio", 0.35);
   let inactiveRatio = config.get<number>("inactiveRatio", 0.1);
+  let configuredActiveColumns = config.get<number>("activeColumns", 4);
 
   let activeColumns: number;
 
-  const configuredActiveColumns = config.get<number>("activeColumns", 4);
-  if (configuredActiveColumns < totalColumns) {
-    activeColumns = configuredActiveColumns;
-  } else {
-    try {
-      const resolution = await detectResolution();
-      const userPresets = config.get<Record<string, number>>("presets", {});
-      const presets = buildPresets(userPresets);
-      activeColumns = resolveActiveColumns(
-        resolution.width,
-        totalColumns,
-        presets
-      );
-    } catch (error) {
-      activeColumns = totalColumns;
-      vscode.window.showWarningMessage(
-        `Editor Spotlighter: 解像度検出に失敗したため等間隔モードで動作します。(${(error as Error).message})`
-      );
-    }
+  const userPresets = config.get<Record<string, number>>("presets", {});
+  let presets = buildPresets(userPresets);
+
+  try {
+    activeColumns = await recalculateActiveColumns(
+      context,
+      totalColumns,
+      configuredActiveColumns,
+      presets
+    );
+  } catch (error) {
+    activeColumns = totalColumns;
+    vscode.window.showWarningMessage(
+      `Editor Spotlighter: ウィンドウ幅検出に失敗したため等間隔モードで動作します。(${(error as Error).message})`
+    );
   }
+
+  const refreshActiveColumns = () => {
+    if (widthDetectTimer !== undefined) {
+      clearTimeout(widthDetectTimer);
+    }
+
+    widthDetectTimer = setTimeout(async () => {
+      widthDetectTimer = undefined;
+
+      try {
+        const newActiveColumns = await recalculateActiveColumns(
+          context,
+          totalColumns,
+          configuredActiveColumns,
+          presets
+        );
+
+        if (newActiveColumns !== activeColumns) {
+          activeColumns = newActiveColumns;
+          onFocusChange();
+        }
+      } catch {
+        // ウィンドウ幅の再検出失敗時は現在のactiveColumnsを維持
+      }
+    }, 500);
+  };
 
   const onFocusChange = () => {
     if (!enabled) {
@@ -113,7 +177,16 @@ export async function activate(
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(() => {
+      refreshActiveColumns();
       onFocusChange();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.window.onDidChangeWindowState((windowState) => {
+      if (windowState.focused) {
+        refreshActiveColumns();
+      }
     })
   );
 
@@ -171,9 +244,32 @@ export async function activate(
   context.subscriptions.push(
     vscode.commands.registerCommand("editorSpotlighter.alignLayout", async () => {
       await resetToEqual(totalColumns);
-      vscode.window.showInformationMessage(
-        "Editor Spotlighter: レイアウトを整形しました"
-      );
+
+      // 学習機能: 現在のウィンドウ幅を「快適な幅」として記録
+      try {
+        const currentWidth = await detectWindowWidth();
+        const learnedWidths = context.globalState.get<number[]>(
+          LEARNED_WIDTH_KEY,
+          []
+        );
+
+        learnedWidths.push(currentWidth);
+
+        // 最大件数を超えた場合は古いものから削除
+        if (learnedWidths.length > MAX_LEARNED_ENTRIES) {
+          learnedWidths.splice(0, learnedWidths.length - MAX_LEARNED_ENTRIES);
+        }
+
+        await context.globalState.update(LEARNED_WIDTH_KEY, learnedWidths);
+
+        vscode.window.showInformationMessage(
+          `Editor Spotlighter: レイアウトを整形しました（ウィンドウ幅 ${currentWidth}px を学習）`
+        );
+      } catch {
+        vscode.window.showInformationMessage(
+          "Editor Spotlighter: レイアウトを整形しました"
+        );
+      }
     })
   );
 
@@ -266,9 +362,14 @@ export async function activate(
       activeRatio = updated.get<number>("activeRatio", 0.35);
       inactiveRatio = updated.get<number>("inactiveRatio", 0.1);
 
-      const updatedActiveColumns = updated.get<number>("activeColumns", 4);
-      if (updatedActiveColumns < totalColumns) {
-        activeColumns = updatedActiveColumns;
+      configuredActiveColumns = updated.get<number>("activeColumns", 4);
+      const updatedUserPresets = updated.get<Record<string, number>>("presets", {});
+      presets = buildPresets(updatedUserPresets);
+
+      if (configuredActiveColumns < totalColumns) {
+        activeColumns = configuredActiveColumns;
+      } else {
+        refreshActiveColumns();
       }
 
       // タブ設定が変更されたらVSCode本体設定を連動書き換え
@@ -297,6 +398,11 @@ export async function deactivate(): Promise<void> {
   if (debounceTimer !== undefined) {
     clearTimeout(debounceTimer);
     debounceTimer = undefined;
+  }
+
+  if (widthDetectTimer !== undefined) {
+    clearTimeout(widthDetectTimer);
+    widthDetectTimer = undefined;
   }
 
   const config = vscode.workspace.getConfiguration("editorSpotlighter");

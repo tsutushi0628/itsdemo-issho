@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+  <!-- Spotlight cone from top-right corner -->
+  <path d="M23 0 L8 18 L18 18 Z" fill="currentColor" opacity="0.15"/>
+
+  <!-- 3 columns: wide(active) / narrow / narrow -->
+  <rect x="2" y="4" width="8" height="14" rx="1" fill="currentColor" opacity="1"/>
+  <rect x="11.5" y="4" width="4" height="14" rx="1" fill="currentColor" opacity="0.45"/>
+  <rect x="17" y="4" width="4" height="14" rx="1" fill="currentColor" opacity="0.3"/>
+
+  <!-- Elliptical shadow below columns -->
+  <ellipse cx="11" cy="20.5" rx="8" ry="1.8" fill="currentColor" opacity="0.2"/>
+</svg>

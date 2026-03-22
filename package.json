@@ -20,7 +20,7 @@
         {
           "id": "editorSpotlighter",
           "title": "Editor Spotlighter",
-          "icon": "$(layout)"
+          "icon": "resources/icon.svg"
         }
       ]
     },
@@ -96,7 +96,7 @@
         "editorSpotlighter.presets": {
           "type": "object",
           "default": {},
-          "description": "解像度別プリセット"
+          "description": "ウィンドウ幅別プリセット（キー: 最小ウィンドウ幅px, 値: activeColumns数）"
         }
       }
     },
@@ -120,7 +120,10 @@
       {
         "command": "editorSpotlighter.alignLayout",
         "title": "Align Layout",
-        "icon": "$(layout)"
+        "icon": {
+          "light": "resources/icon.svg",
+          "dark": "resources/icon.svg"
+        }
       },
       {
         "command": "editorSpotlighter.closeTab",
