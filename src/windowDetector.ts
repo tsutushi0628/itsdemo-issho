@@ -3,22 +3,45 @@ import { exec } from "child_process";
 export function detectWindowWidth(): Promise<number> {
   return new Promise((resolve, reject) => {
     if (process.platform === "darwin") {
-      exec(
-        `osascript -e 'tell application "Visual Studio Code" to get bounds of window 1'`,
-        (error, stdout) => {
-          if (error) {
-            reject(
-              new Error(
-                `osascript の実行に失敗しました: ${error.message}`
-              )
-            );
-            return;
-          }
+      // macOS: Swift CGWindowList API（アクセシビリティ権限不要）
+      const swiftScript = `
+import CoreGraphics
+import Foundation
 
-          const width = parseMacOSBounds(stdout);
-          resolve(width);
+let windowList = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
+for window in windowList {
+    if let owner = window["kCGWindowOwnerName"] as? String, owner == "Code" {
+        if let bounds = window["kCGWindowBounds"] as? [String: Any] {
+            let width = bounds["Width"] as? Int ?? 0
+            print(width)
+            break
         }
-      );
+    }
+}
+`;
+
+      exec(`swift -e '${swiftScript}'`, (error, stdout) => {
+        if (error) {
+          reject(
+            new Error(
+              `swift の実行に失敗しました: ${error.message}`
+            )
+          );
+          return;
+        }
+
+        const width = parseInt(stdout.trim(), 10);
+        if (isNaN(width) || width <= 0) {
+          reject(
+            new Error(
+              `ウィンドウ幅を取得できませんでした: "${stdout.trim()}"`
+            )
+          );
+          return;
+        }
+
+        resolve(width);
+      });
     } else if (process.platform === "win32") {
       const psScript = `
         Add-Type @"
@@ -80,27 +103,6 @@ export function detectWindowWidth(): Promise<number> {
       );
     }
   });
-}
-
-export function parseMacOSBounds(stdout: string): number {
-  // osascript output format: "x1, y1, x2, y2\n"
-  const parts = stdout.trim().split(",");
-  if (parts.length < 4) {
-    throw new Error(
-      `osascript の出力をパースできませんでした: "${stdout.trim()}"`
-    );
-  }
-
-  const x1 = parseInt(parts[0].trim(), 10);
-  const x2 = parseInt(parts[2].trim(), 10);
-
-  if (isNaN(x1) || isNaN(x2)) {
-    throw new Error(
-      `osascript の出力から座標を取得できませんでした: "${stdout.trim()}"`
-    );
-  }
-
-  return x2 - x1;
 }
 
 export function parseWindowsOutput(stdout: string): number {

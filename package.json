@@ -63,10 +63,11 @@
           "default": 4,
           "description": "総カラム数"
         },
-        "editorSpotlighter.activeColumns": {
+        "editorSpotlighter.minColumnWidth": {
           "type": "number",
-          "default": 4,
-          "description": "同時にアクティブにするカラム数（画面が広いときは全部アクティブ）"
+          "default": 400,
+          "minimum": 100,
+          "description": "1カラムの最小快適幅（px）。ウィンドウ幅をこの値で割ってアクティブカラム数を自動決定します"
         },
         "editorSpotlighter.activeRatio": {
           "type": "number",
@@ -92,11 +93,6 @@
           "type": "boolean",
           "default": false,
           "description": "プレビューモードを無効にして常に新しいタブで開く（VSCodeの workbench.editor.enablePreview を制御）"
-        },
-        "editorSpotlighter.presets": {
-          "type": "object",
-          "default": {},
-          "description": "ウィンドウ幅別プリセット（キー: 最小ウィンドウ幅px, 値: activeColumns数）"
         }
       }
     },

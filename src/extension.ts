@@ -1,56 +1,27 @@
 import * as vscode from "vscode";
 import { detectWindowWidth } from "./windowDetector";
-import {
-  resolveActiveColumns,
-  buildPresets,
-  Preset,
-} from "./presetManager";
+import { computeActiveColumns } from "./columnCalculator";
 import { calculateLayout, applyLayout, LayoutConfig } from "./layoutEngine";
 import { TabTreeProvider } from "./tabTreeProvider";
-
-const LEARNED_WIDTH_KEY = "learnedComfortableWidths";
-const MAX_LEARNED_ENTRIES = 10;
 
 let enabled = true;
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 let widthDetectTimer: ReturnType<typeof setTimeout> | undefined;
 
 async function recalculateActiveColumns(
-  context: vscode.ExtensionContext,
   totalColumns: number,
-  configuredActiveColumns: number,
-  presets: Preset[]
+  minColumnWidth: number
 ): Promise<number> {
-  if (configuredActiveColumns < totalColumns) {
-    return configuredActiveColumns;
-  }
-
   const windowWidth = await detectWindowWidth();
-
-  const learnedWidths = context.globalState.get<number[]>(
-    LEARNED_WIDTH_KEY,
-    []
-  );
-
-  if (learnedWidths.length > 0) {
-    let comfortableMinWidth = learnedWidths[0];
-    for (let i = 1; i < learnedWidths.length; i++) {
-      if (learnedWidths[i] < comfortableMinWidth) {
-        comfortableMinWidth = learnedWidths[i];
-      }
-    }
-
-    if (windowWidth >= comfortableMinWidth) {
-      return totalColumns;
-    }
-  }
-
-  return resolveActiveColumns(windowWidth, totalColumns, presets);
+  return computeActiveColumns(windowWidth, minColumnWidth, totalColumns);
 }
 
 export async function activate(
   context: vscode.ExtensionContext
 ): Promise<void> {
+  const outputChannel = vscode.window.createOutputChannel("Editor Spotlighter");
+  outputChannel.appendLine("=== Editor Spotlighter activated ===");
+
   const config = vscode.workspace.getConfiguration("editorSpotlighter");
   enabled = config.get<boolean>("enabled", true);
 
@@ -60,26 +31,20 @@ export async function activate(
   let totalColumns = config.get<number>("totalColumns", 4);
   let activeRatio = config.get<number>("activeRatio", 0.35);
   let inactiveRatio = config.get<number>("inactiveRatio", 0.1);
-  let configuredActiveColumns = config.get<number>("activeColumns", 4);
+  let minColumnWidth = config.get<number>("minColumnWidth", 400);
 
   let activeColumns: number;
 
-  const userPresets = config.get<Record<string, number>>("presets", {});
-  let presets = buildPresets(userPresets);
-
   try {
-    activeColumns = await recalculateActiveColumns(
-      context,
-      totalColumns,
-      configuredActiveColumns,
-      presets
-    );
+    activeColumns = await recalculateActiveColumns(totalColumns, minColumnWidth);
   } catch (error) {
     activeColumns = totalColumns;
     vscode.window.showWarningMessage(
       `Editor Spotlighter: ウィンドウ幅検出に失敗したため等間隔モードで動作します。(${(error as Error).message})`
     );
   }
+
+  outputChannel.appendLine(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}`);
 
   const refreshActiveColumns = () => {
     if (widthDetectTimer !== undefined) {
@@ -91,27 +56,34 @@ export async function activate(
 
       try {
         const newActiveColumns = await recalculateActiveColumns(
-          context,
           totalColumns,
-          configuredActiveColumns,
-          presets
+          minColumnWidth
         );
+
+        outputChannel.appendLine(`[refresh] newActiveColumns=${newActiveColumns}, current=${activeColumns}`);
 
         if (newActiveColumns !== activeColumns) {
           activeColumns = newActiveColumns;
-          onFocusChange();
+          if (activeColumns >= totalColumns) {
+            await resetToEqual(totalColumns);
+          } else {
+            onFocusChange();
+          }
         }
-      } catch {
-        // ウィンドウ幅の再検出失敗時は現在のactiveColumnsを維持
+      } catch (err) {
+        outputChannel.appendLine(`[refresh] error: ${(err as Error).message}`);
       }
     }, 500);
   };
 
   const onFocusChange = () => {
+    outputChannel.appendLine(`[focus] activeColumns=${activeColumns}, totalColumns=${totalColumns}, enabled=${enabled}`);
+
     if (!enabled) {
       return;
     }
 
+    outputChannel.appendLine(`[focus] activeColumns >= totalColumns check: ${activeColumns} >= ${totalColumns} = ${activeColumns >= totalColumns}`);
     if (activeColumns >= totalColumns) {
       return;
     }
@@ -177,7 +149,6 @@ export async function activate(
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(() => {
-      refreshActiveColumns();
       onFocusChange();
     })
   );
@@ -244,32 +215,9 @@ export async function activate(
   context.subscriptions.push(
     vscode.commands.registerCommand("editorSpotlighter.alignLayout", async () => {
       await resetToEqual(totalColumns);
-
-      // 学習機能: 現在のウィンドウ幅を「快適な幅」として記録
-      try {
-        const currentWidth = await detectWindowWidth();
-        const learnedWidths = context.globalState.get<number[]>(
-          LEARNED_WIDTH_KEY,
-          []
-        );
-
-        learnedWidths.push(currentWidth);
-
-        // 最大件数を超えた場合は古いものから削除
-        if (learnedWidths.length > MAX_LEARNED_ENTRIES) {
-          learnedWidths.splice(0, learnedWidths.length - MAX_LEARNED_ENTRIES);
-        }
-
-        await context.globalState.update(LEARNED_WIDTH_KEY, learnedWidths);
-
-        vscode.window.showInformationMessage(
-          `Editor Spotlighter: レイアウトを整形しました（ウィンドウ幅 ${currentWidth}px を学習）`
-        );
-      } catch {
-        vscode.window.showInformationMessage(
-          "Editor Spotlighter: レイアウトを整形しました"
-        );
-      }
+      vscode.window.showInformationMessage(
+        "Editor Spotlighter: レイアウトを整形しました"
+      );
     })
   );
 
@@ -361,16 +309,9 @@ export async function activate(
       totalColumns = updated.get<number>("totalColumns", 4);
       activeRatio = updated.get<number>("activeRatio", 0.35);
       inactiveRatio = updated.get<number>("inactiveRatio", 0.1);
+      minColumnWidth = updated.get<number>("minColumnWidth", 400);
 
-      configuredActiveColumns = updated.get<number>("activeColumns", 4);
-      const updatedUserPresets = updated.get<Record<string, number>>("presets", {});
-      presets = buildPresets(updatedUserPresets);
-
-      if (configuredActiveColumns < totalColumns) {
-        activeColumns = configuredActiveColumns;
-      } else {
-        refreshActiveColumns();
-      }
+      refreshActiveColumns();
 
       // タブ設定が変更されたらVSCode本体設定を連動書き換え
       if (
@@ -456,4 +397,3 @@ async function applyTabSettings(
     );
   }
 }
-
