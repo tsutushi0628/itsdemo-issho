@@ -551,8 +551,15 @@ enterUp?.post(tap: .cghidEventTap)
   context.subscriptions.push(remoteStatusBarItem);
 
   // QRコードをサイドバーのWebViewに表示
-  const localIp = getLocalIpAddress();
-  const url = `http://${localIp}:${port}/?token=${token}`;
+  // Cloudflare Tunnel経由の固定URL（設定可能）
+  const tunnelDomain = config.get<string>("remoteView.tunnelDomain", "");
+  let url: string;
+  if (tunnelDomain) {
+    url = `https://${tunnelDomain}/?token=${token}`;
+  } else {
+    const localIp = getLocalIpAddress();
+    url = `http://${localIp}:${port}/?token=${token}`;
+  }
   const qrSvg = await QRCode.toString(url, { type: "svg" });
 
   if (remoteWebviewProvider) {

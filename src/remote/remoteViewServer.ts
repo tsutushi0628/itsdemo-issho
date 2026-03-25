@@ -219,7 +219,8 @@ mouseUp?.post(tap: .cghidEventTap)
     }
 
     if (requestUrl.pathname === "/" || requestUrl.pathname === "") {
-      const wsProtocol = "ws";
+      const isHttps = req.headers["x-forwarded-proto"] === "https" || req.headers["cf-visitor"]?.includes('"scheme":"https"');
+      const wsProtocol = isHttps ? "wss" : "ws";
       const host = req.headers.host ?? "localhost";
       const wsUrl = `${wsProtocol}://${host}/ws?token=${tokenParam}`;
       const html = getMobileHtml(wsUrl);

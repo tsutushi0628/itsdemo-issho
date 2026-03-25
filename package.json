@@ -104,6 +104,11 @@
           "default": false,
           "description": "プレビューモードを無効にして常に新しいタブで開く（VSCodeの workbench.editor.enablePreview を制御）"
         },
+        "editorSpotlighter.remoteView.tunnelDomain": {
+          "type": "string",
+          "default": "",
+          "description": "Cloudflare Tunnelのドメイン（例: itsudemo-issho.st-labo.app）。設定するとQRコードがこのドメインのURLで生成されます"
+        },
         "editorSpotlighter.remoteView.enabled": {
           "type": "boolean",
           "default": false,
