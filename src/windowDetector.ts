@@ -12,24 +12,17 @@ export function getWindowBounds(): Promise<WindowBounds> {
     const swiftScript = `
 import CoreGraphics
 let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
-var bestWindow: [String: Any]? = nil
-var maxWidth: Double = 0
 for w in list {
     if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code",
        let bounds = w["kCGWindowBounds"] as? [String: Any],
-       let width = bounds["Width"] as? Double {
-        if width > maxWidth {
-            maxWidth = width
-            bestWindow = bounds
-        }
+       let width = bounds["Width"] as? Double,
+       width >= 500,
+       let x = bounds["X"] as? Double,
+       let y = bounds["Y"] as? Double,
+       let height = bounds["Height"] as? Double {
+        print("\\(x),\\(y),\\(width),\\(height)")
+        break
     }
-}
-if let b = bestWindow,
-   let x = b["X"] as? Double,
-   let y = b["Y"] as? Double,
-   let w = b["Width"] as? Double,
-   let h = b["Height"] as? Double {
-    print("\\(x),\\(y),\\(w),\\(h)")
 }
 `;
 
@@ -62,18 +55,14 @@ export function detectWindowWidth(): Promise<number> {
       const swiftScript = `
 import CoreGraphics
 let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
-var maxWidth: Double = 0
 for w in list {
     if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code",
        let bounds = w["kCGWindowBounds"] as? [String: Any],
-       let width = bounds["Width"] as? Double {
-        if width > maxWidth {
-            maxWidth = width
-        }
+       let width = bounds["Width"] as? Double,
+       width >= 500 {
+        print(Int(width))
+        break
     }
-}
-if maxWidth > 0 {
-    print(Int(maxWidth))
 }
 `;
 
