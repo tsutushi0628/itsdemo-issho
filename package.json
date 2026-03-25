@@ -104,6 +104,11 @@
           "default": false,
           "description": "プレビューモードを無効にして常に新しいタブで開く（VSCodeの workbench.editor.enablePreview を制御）"
         },
+        "editorSpotlighter.openInNextColumn": {
+          "type": "boolean",
+          "default": true,
+          "description": "新しいファイルをアクティブカラムの右隣のカラムで開く（フォーカスは移動しない）"
+        },
         "editorSpotlighter.remoteView.tunnelDomain": {
           "type": "string",
           "default": "",

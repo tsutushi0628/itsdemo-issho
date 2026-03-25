@@ -19,6 +19,8 @@ let remoteToken: string | null = null;
 let remoteWebviewProvider: RemoteWebviewProvider | null = null;
 let mobileConnected = false;
 let savedActiveColumns: number | null = null;
+let previousActiveViewColumn: number = 1;
+let openInNextColumn = true;
 
 async function recalculateActiveColumns(
   totalColumns: number,
@@ -71,6 +73,7 @@ export async function activate(
 
   const config = vscode.workspace.getConfiguration("editorSpotlighter");
   enabled = config.get<boolean>("enabled", true);
+  openInNextColumn = config.get<boolean>("openInNextColumn", true);
 
   // activate時にタブ設定を初期反映
   await applyTabSettings(config);
@@ -211,6 +214,23 @@ export async function activate(
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       debugLog(`[editor-change] editor=${editor?.document?.fileName ?? 'none'}, viewColumn=${editor?.viewColumn ?? 'none'}`);
+
+      if (editor && openInNextColumn && editor.viewColumn) {
+        const currentColumn = editor.viewColumn;
+        const groups = vscode.window.tabGroups.all;
+
+        // 右端に開かれた & 前のアクティブカラムの右隣ではない場合、右隣に移動
+        if (currentColumn > previousActiveViewColumn + 1 && previousActiveViewColumn + 1 <= groups.length) {
+          const targetColumn = previousActiveViewColumn + 1;
+          vscode.window.showTextDocument(editor.document.uri, {
+            viewColumn: targetColumn as vscode.ViewColumn,
+            preview: false,
+          });
+        }
+
+        previousActiveViewColumn = currentColumn;
+      }
+
       onFocusChange();
     })
   );
@@ -460,6 +480,7 @@ export async function activate(
       inactiveRatio = updated.get<number>("inactiveRatio", 0.1);
       minColumnWidth = updated.get<number>("minColumnWidth", 850);
       fullWidthThreshold = updated.get<number>("fullWidthThreshold", 3000);
+      openInNextColumn = updated.get<boolean>("openInNextColumn", true);
 
       refreshActiveColumns();
 
