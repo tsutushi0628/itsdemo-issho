@@ -1,5 +1,52 @@
 import { exec } from "child_process";
 
+export interface WindowBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export function getWindowBounds(): Promise<WindowBounds> {
+  return new Promise((resolve, reject) => {
+    const swiftScript = `
+import CoreGraphics
+let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
+for w in list {
+    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code",
+       let bounds = w["kCGWindowBounds"] as? [String: Any],
+       let x = bounds["X"] as? Double,
+       let y = bounds["Y"] as? Double,
+       let width = bounds["Width"] as? Double,
+       let height = bounds["Height"] as? Double {
+        print("\\(x),\\(y),\\(width),\\(height)")
+        break
+    }
+}
+`;
+
+    exec(`swift -e '${swiftScript}'`, (error, stdout) => {
+      if (error) {
+        reject(new Error(`swift の実行に失敗しました: ${error.message}`));
+        return;
+      }
+
+      const parts = stdout.trim().split(",");
+      if (parts.length < 4) {
+        reject(new Error(`ウィンドウ情報を取得できませんでした: "${stdout.trim()}"`));
+        return;
+      }
+
+      resolve({
+        x: parseFloat(parts[0]),
+        y: parseFloat(parts[1]),
+        width: parseFloat(parts[2]),
+        height: parseFloat(parts[3]),
+      });
+    });
+  });
+}
+
 export function detectWindowWidth(): Promise<number> {
   return new Promise((resolve, reject) => {
     if (process.platform === "darwin") {

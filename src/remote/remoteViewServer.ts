@@ -23,7 +23,14 @@ export class RemoteViewServer {
   private windowId: string | null = null;
   private messageCallback: ((msg: ClientMessage) => void) | null = null;
   private currentTabs: TabInfo[] = [];
-  private originalBounds: WindowBounds | null = null;
+  private cropRegion: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null = null;
+  private connectCallback: (() => void) | null = null;
+  private disconnectCallback: (() => void) | null = null;
 
   constructor(token: string, _projectPath: string) {
     this.token = token;
@@ -49,6 +56,47 @@ export class RemoteViewServer {
 
   onClientMessage(callback: (msg: ClientMessage) => void): void {
     this.messageCallback = callback;
+  }
+
+  setCropRegion(
+    x: number,
+    y: number,
+    width: number,
+    height: number
+  ): void {
+    this.cropRegion = { x, y, width, height };
+  }
+
+  clearCropRegion(): void {
+    this.cropRegion = null;
+  }
+
+  onFirstConnect(callback: () => void): void {
+    this.connectCallback = callback;
+  }
+
+  onAllDisconnect(callback: () => void): void {
+    this.disconnectCallback = callback;
+  }
+
+  private sendFrame(): void {
+    let data: Buffer;
+    try {
+      data = fs.readFileSync("/tmp/es-frame.jpg");
+    } catch {
+      return;
+    }
+    const base64 = data.toString("base64");
+    const msg: ServerMessage = {
+      type: "frame",
+      data: "data:image/jpeg;base64," + base64,
+    };
+    const payload = JSON.stringify(msg);
+    for (const client of this.wss!.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(payload);
+      }
+    }
   }
 
   async start(port: number): Promise<void> {
@@ -143,74 +191,6 @@ for w in list {
     };
   }
 
-  private resizeForMobile(): void {
-    const bounds = this.getWindowBounds();
-    this.originalBounds = bounds;
-
-    const targetWidth = 430;
-    const targetHeight = 932;
-    const x = bounds.x;
-    const y = bounds.y;
-
-    execSync(`swift -e '
-import CoreGraphics
-import ApplicationServices
-
-let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
-for w in list {
-    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code",
-       let pid = w["kCGWindowOwnerPID"] as? Int32 {
-        let app = AXUIElementCreateApplication(pid)
-        var window: AnyObject?
-        AXUIElementCopyAttributeValue(app, "AXWindows" as CFString, &window)
-        if let windows = window as? [AXUIElement], let firstWindow = windows.first {
-            var position = CGPoint(x: ${x}, y: ${y})
-            var size = CGSize(width: ${targetWidth}, height: ${targetHeight})
-            let posValue = AXValueCreate(.cgPoint, &position)!
-            let sizeValue = AXValueCreate(.cgSize, &size)!
-            AXUIElementSetAttributeValue(firstWindow, "AXPosition" as CFString, posValue)
-            AXUIElementSetAttributeValue(firstWindow, "AXSize" as CFString, sizeValue)
-        }
-        break
-    }
-}
-'`);
-  }
-
-  private restoreOriginalSize(): void {
-    if (!this.originalBounds) {
-      return;
-    }
-
-    const { x, y, width, height } = this.originalBounds;
-
-    execSync(`swift -e '
-import CoreGraphics
-import ApplicationServices
-
-let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
-for w in list {
-    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code",
-       let pid = w["kCGWindowOwnerPID"] as? Int32 {
-        let app = AXUIElementCreateApplication(pid)
-        var window: AnyObject?
-        AXUIElementCopyAttributeValue(app, "AXWindows" as CFString, &window)
-        if let windows = window as? [AXUIElement], let firstWindow = windows.first {
-            var position = CGPoint(x: ${x}, y: ${y})
-            var size = CGSize(width: ${width}, height: ${height})
-            let posValue = AXValueCreate(.cgPoint, &position)!
-            let sizeValue = AXValueCreate(.cgSize, &size)!
-            AXUIElementSetAttributeValue(firstWindow, "AXPosition" as CFString, posValue)
-            AXUIElementSetAttributeValue(firstWindow, "AXSize" as CFString, sizeValue)
-        }
-        break
-    }
-}
-'`);
-
-    this.originalBounds = null;
-  }
-
   private startCapture(): void {
     if (this.captureInterval) {
       return;
@@ -222,42 +202,35 @@ for w in list {
       return;
     }
 
-    try {
-      this.resizeForMobile();
-    } catch {
-      // リサイズ失敗してもキャプチャは続行
-    }
-
     this.captureInterval = setInterval(() => {
       if (!this.wss || this.wss.clients.size === 0) {
         return;
       }
 
       exec(
-        `screencapture -x -o -l ${this.windowId} -t jpg /tmp/es-frame.jpg`,
+        `screencapture -x -o -l ${this.windowId} -t jpg /tmp/es-frame-full.jpg`,
         (err) => {
           if (err) {
             return;
           }
 
-          let data: Buffer;
-          try {
-            data = fs.readFileSync("/tmp/es-frame.jpg");
-          } catch {
-            return;
-          }
-
-          const base64 = data.toString("base64");
-          const msg: ServerMessage = {
-            type: "frame",
-            data: "data:image/jpeg;base64," + base64,
-          };
-          const payload = JSON.stringify(msg);
-
-          for (const client of this.wss!.clients) {
-            if (client.readyState === WebSocket.OPEN) {
-              client.send(payload);
-            }
+          if (this.cropRegion) {
+            exec(
+              `sips --cropToHeightWidth ${this.cropRegion.height} ${this.cropRegion.width} --cropOffset ${this.cropRegion.y} ${this.cropRegion.x} /tmp/es-frame-full.jpg --out /tmp/es-frame.jpg`,
+              (cropErr) => {
+                if (cropErr) {
+                  return;
+                }
+                this.sendFrame();
+              }
+            );
+          } else {
+            exec(
+              "cp /tmp/es-frame-full.jpg /tmp/es-frame.jpg",
+              () => {
+                this.sendFrame();
+              }
+            );
           }
         }
       );
@@ -270,12 +243,6 @@ for w in list {
       this.captureInterval = null;
     }
     this.windowId = null;
-
-    try {
-      this.restoreOriginalSize();
-    } catch {
-      // 復元失敗は無視（ウィンドウが既に閉じている等）
-    }
   }
 
   private handleClick(x: number, y: number): void {
@@ -353,8 +320,13 @@ mouseUp?.post(tap: .cghidEventTap)
       return;
     }
 
-    // 最初のクライアント接続でキャプチャ開始
+    // 最初のクライアント接続でキャプチャ開始＋コールバック呼び出し
+    const wasFirstClient = this.wss!.clients.size === 1;
     this.startCapture();
+
+    if (wasFirstClient && this.connectCallback) {
+      this.connectCallback();
+    }
 
     // 接続時にタブ情報を即座に送信
     if (this.currentTabs.length > 0) {
@@ -381,9 +353,12 @@ mouseUp?.post(tap: .cghidEventTap)
     });
 
     ws.on("close", () => {
-      // 全クライアント切断時にキャプチャ停止
+      // 全クライアント切断時にキャプチャ停止＋コールバック呼び出し
       if (this.wss && this.wss.clients.size === 0) {
         this.stopCapture();
+        if (this.disconnectCallback) {
+          this.disconnectCallback();
+        }
       }
     });
   }

@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as os from "os";
 import { exec } from "child_process";
 import QRCode from "qrcode";
-import { detectWindowWidth } from "./windowDetector";
+import { detectWindowWidth, getWindowBounds } from "./windowDetector";
 import { computeActiveColumns } from "./columnCalculator";
 import { calculateLayout, applyLayout, LayoutConfig } from "./layoutEngine";
 import { TabTreeProvider } from "./tabTreeProvider";
@@ -17,6 +17,8 @@ let remoteServer: RemoteViewServer | null = null;
 let remoteStatusBarItem: vscode.StatusBarItem | null = null;
 let remoteToken: string | null = null;
 let remoteWebviewProvider: RemoteWebviewProvider | null = null;
+let mobileConnected = false;
+let savedActiveColumns: number | null = null;
 
 async function recalculateActiveColumns(
   totalColumns: number,
@@ -25,6 +27,40 @@ async function recalculateActiveColumns(
 ): Promise<number> {
   const windowWidth = await detectWindowWidth();
   return computeActiveColumns(windowWidth, minColumnWidth, totalColumns, fullWidthThreshold);
+}
+
+async function updateCropRegion(
+  layout: import("./layoutEngine").EditorLayout,
+  focusedGroupIndex: number
+): Promise<void> {
+  if (!remoteServer || !mobileConnected) {
+    return;
+  }
+
+  let bounds: import("./windowDetector").WindowBounds;
+  try {
+    bounds = await getWindowBounds();
+  } catch {
+    return;
+  }
+
+  // アクティビティバー幅（48px）を除いたエディタ領域
+  const activityBarWidth = 48;
+  const editorWidth = bounds.width - activityBarWidth;
+
+  // フォーカスされたカラムのオフセットと幅を計算
+  let offsetX = 0;
+  for (let i = 0; i < focusedGroupIndex; i++) {
+    offsetX += layout.groups[i].size * editorWidth;
+  }
+  const columnWidth = layout.groups[focusedGroupIndex].size * editorWidth;
+
+  remoteServer.setCropRegion(
+    Math.round(activityBarWidth + offsetX),
+    0,
+    Math.round(columnWidth),
+    Math.round(bounds.height)
+  );
 }
 
 export async function activate(
@@ -161,6 +197,7 @@ export async function activate(
       (async () => {
         try {
           await applyLayout(layout);
+          await updateCropRegion(layout, focusedGroupIndex);
         } catch (error) {
           vscode.window.showWarningMessage(
             `Editor Spotlighter: レイアウト適用に失敗しました。(${(error as Error).message})`
@@ -253,6 +290,21 @@ export async function activate(
   });
   context.subscriptions.push(treeView);
 
+  // モバイル接続時のコールバック定義
+  const handleMobileConnect = () => {
+    savedActiveColumns = activeColumns;
+    activeColumns = 1;
+    onFocusChange();
+  };
+
+  const handleMobileDisconnect = () => {
+    if (savedActiveColumns !== null) {
+      activeColumns = savedActiveColumns;
+      savedActiveColumns = null;
+    }
+    onFocusChange();
+  };
+
   // RemoteWebviewProvider の登録（サイドバー内WebView）
   remoteWebviewProvider = new RemoteWebviewProvider();
   context.subscriptions.push(
@@ -265,7 +317,7 @@ export async function activate(
   remoteWebviewProvider.onDidReceiveMessage(async (message) => {
     if (message.command === "start") {
       if (!remoteServer) {
-        await startRemoteViewServer(context);
+        await startRemoteViewServer(context, handleMobileConnect, handleMobileDisconnect);
       }
     } else if (message.command === "stop") {
       await stopRemoteViewServer();
@@ -375,7 +427,7 @@ export async function activate(
           );
           return;
         }
-        await startRemoteViewServer(context);
+        await startRemoteViewServer(context, handleMobileConnect, handleMobileDisconnect);
       }
     )
   );
@@ -393,7 +445,7 @@ export async function activate(
   const remoteConfig = vscode.workspace.getConfiguration("editorSpotlighter");
   const remoteEnabled = remoteConfig.get<boolean>("remoteView.enabled", false);
   if (remoteEnabled) {
-    await startRemoteViewServer(context);
+    await startRemoteViewServer(context, handleMobileConnect, handleMobileDisconnect);
   }
 
   context.subscriptions.push(
@@ -482,7 +534,9 @@ function getLocalIpAddress(): string {
 }
 
 async function startRemoteViewServer(
-  context: vscode.ExtensionContext
+  context: vscode.ExtensionContext,
+  onMobileConnect?: () => void,
+  onMobileDisconnect?: () => void
 ): Promise<void> {
   const config = vscode.workspace.getConfiguration("editorSpotlighter");
   const port = config.get<number>("remoteView.port", 19280);
@@ -499,6 +553,34 @@ async function startRemoteViewServer(
   remoteToken = generateToken();
   const token = remoteToken;
   remoteServer = new RemoteViewServer(token, projectPath);
+
+  remoteServer.onFirstConnect(() => {
+    mobileConnected = true;
+
+    // サイドバーを閉じる
+    vscode.commands.executeCommand("workbench.action.closeSidebar");
+
+    // アコーディオンをactiveColumns=1に強制
+    if (onMobileConnect) {
+      onMobileConnect();
+    }
+  });
+
+  remoteServer.onAllDisconnect(() => {
+    mobileConnected = false;
+
+    // サイドバーを復元
+    vscode.commands.executeCommand("workbench.action.toggleSidebarVisibility");
+
+    // クロップ解除
+    if (remoteServer) {
+      remoteServer.clearCropRegion();
+    }
+
+    if (onMobileDisconnect) {
+      onMobileDisconnect();
+    }
+  });
 
   remoteServer.onClientMessage(async (msg) => {
     if (msg.type === "type") {
