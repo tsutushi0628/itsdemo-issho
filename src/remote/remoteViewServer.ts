@@ -23,6 +23,7 @@ export class RemoteViewServer {
   private windowId: string | null = null;
   private messageCallback: ((msg: ClientMessage) => void) | null = null;
   private currentTabs: TabInfo[] = [];
+  private originalBounds: WindowBounds | null = null;
 
   constructor(token: string, _projectPath: string) {
     this.token = token;
@@ -142,6 +143,74 @@ for w in list {
     };
   }
 
+  private resizeForMobile(): void {
+    const bounds = this.getWindowBounds();
+    this.originalBounds = bounds;
+
+    const targetWidth = 430;
+    const targetHeight = 932;
+    const x = bounds.x;
+    const y = bounds.y;
+
+    execSync(`swift -e '
+import CoreGraphics
+import ApplicationServices
+
+let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
+for w in list {
+    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code",
+       let pid = w["kCGWindowOwnerPID"] as? Int32 {
+        let app = AXUIElementCreateApplication(pid)
+        var window: AnyObject?
+        AXUIElementCopyAttributeValue(app, "AXWindows" as CFString, &window)
+        if let windows = window as? [AXUIElement], let firstWindow = windows.first {
+            var position = CGPoint(x: ${x}, y: ${y})
+            var size = CGSize(width: ${targetWidth}, height: ${targetHeight})
+            let posValue = AXValueCreate(.cgPoint, &position)!
+            let sizeValue = AXValueCreate(.cgSize, &size)!
+            AXUIElementSetAttributeValue(firstWindow, "AXPosition" as CFString, posValue)
+            AXUIElementSetAttributeValue(firstWindow, "AXSize" as CFString, sizeValue)
+        }
+        break
+    }
+}
+'`);
+  }
+
+  private restoreOriginalSize(): void {
+    if (!this.originalBounds) {
+      return;
+    }
+
+    const { x, y, width, height } = this.originalBounds;
+
+    execSync(`swift -e '
+import CoreGraphics
+import ApplicationServices
+
+let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
+for w in list {
+    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code",
+       let pid = w["kCGWindowOwnerPID"] as? Int32 {
+        let app = AXUIElementCreateApplication(pid)
+        var window: AnyObject?
+        AXUIElementCopyAttributeValue(app, "AXWindows" as CFString, &window)
+        if let windows = window as? [AXUIElement], let firstWindow = windows.first {
+            var position = CGPoint(x: ${x}, y: ${y})
+            var size = CGSize(width: ${width}, height: ${height})
+            let posValue = AXValueCreate(.cgPoint, &position)!
+            let sizeValue = AXValueCreate(.cgSize, &size)!
+            AXUIElementSetAttributeValue(firstWindow, "AXPosition" as CFString, posValue)
+            AXUIElementSetAttributeValue(firstWindow, "AXSize" as CFString, sizeValue)
+        }
+        break
+    }
+}
+'`);
+
+    this.originalBounds = null;
+  }
+
   private startCapture(): void {
     if (this.captureInterval) {
       return;
@@ -151,6 +220,12 @@ for w in list {
       this.windowId = this.getVSCodeWindowId();
     } catch {
       return;
+    }
+
+    try {
+      this.resizeForMobile();
+    } catch {
+      // リサイズ失敗してもキャプチャは続行
     }
 
     this.captureInterval = setInterval(() => {
@@ -195,6 +270,12 @@ for w in list {
       this.captureInterval = null;
     }
     this.windowId = null;
+
+    try {
+      this.restoreOriginalSize();
+    } catch {
+      // 復元失敗は無視（ウィンドウが既に閉じている等）
+    }
   }
 
   private handleClick(x: number, y: number): void {
