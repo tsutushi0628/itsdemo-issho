@@ -324,8 +324,16 @@ export function getMobileHtml(wsUrl: string): string {
   });
 
   closeBtn.addEventListener('click', function() {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'disconnect' }));
+    // 自動再接続を停止
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    if (ws) {
+      ws.onclose = null;  // 再接続ハンドラを無効化
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'disconnect' }));
+      }
+      ws.close();
+      ws = null;
     }
     document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-size:16px;color:#6b7280;">Disconnected</div>';
   });
