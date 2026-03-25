@@ -29,6 +29,11 @@
         {
           "id": "editorSpotlighter.tabList",
           "name": "Tabs"
+        },
+        {
+          "id": "editorSpotlighter.remoteView",
+          "name": "Remote",
+          "type": "webview"
         }
       ]
     },
@@ -65,9 +70,14 @@
         },
         "editorSpotlighter.minColumnWidth": {
           "type": "number",
-          "default": 400,
+          "default": 850,
           "minimum": 100,
           "description": "1カラムの最小快適幅（px）。ウィンドウ幅をこの値で割ってアクティブカラム数を自動決定します"
+        },
+        "editorSpotlighter.fullWidthThreshold": {
+          "type": "number",
+          "default": 3000,
+          "description": "この幅（px）以上のウィンドウでは全カラム等間隔で表示します"
         },
         "editorSpotlighter.activeRatio": {
           "type": "number",
@@ -93,6 +103,16 @@
           "type": "boolean",
           "default": false,
           "description": "プレビューモードを無効にして常に新しいタブで開く（VSCodeの workbench.editor.enablePreview を制御）"
+        },
+        "editorSpotlighter.remoteView.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "モバイルリモートビューを有効にする"
+        },
+        "editorSpotlighter.remoteView.port": {
+          "type": "number",
+          "default": 19280,
+          "description": "リモートビューのポート番号"
         }
       }
     },
@@ -129,6 +149,18 @@
       {
         "command": "editorSpotlighter.focusTab",
         "title": "Editor Spotlighter: Focus Tab"
+      },
+      {
+        "command": "editorSpotlighter.spContinue",
+        "title": "Editor Spotlighter: Continue Session from Mobile"
+      },
+{
+        "command": "editorSpotlighter.startRemoteView",
+        "title": "Editor Spotlighter: Start Remote View"
+      },
+      {
+        "command": "editorSpotlighter.stopRemoteView",
+        "title": "Editor Spotlighter: Stop Remote View"
       }
     ]
   },
@@ -141,9 +173,15 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "@types/qrcode": "^1.5.6",
     "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.18.1",
     "esbuild": "^0.19.0",
     "typescript": "^5.3.0",
     "vitest": "^4.1.0"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "ws": "^8.20.0"
   }
 }

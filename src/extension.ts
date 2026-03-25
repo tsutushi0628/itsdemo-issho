@@ -1,19 +1,30 @@
 import * as vscode from "vscode";
+import * as os from "os";
+import { exec } from "child_process";
+import QRCode from "qrcode";
 import { detectWindowWidth } from "./windowDetector";
 import { computeActiveColumns } from "./columnCalculator";
 import { calculateLayout, applyLayout, LayoutConfig } from "./layoutEngine";
 import { TabTreeProvider } from "./tabTreeProvider";
+import { RemoteViewServer } from "./remote/remoteViewServer";
+import { generateToken } from "./remote/tokenAuth";
+import { RemoteWebviewProvider } from "./remoteWebviewProvider";
 
 let enabled = true;
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 let widthDetectTimer: ReturnType<typeof setTimeout> | undefined;
+let remoteServer: RemoteViewServer | null = null;
+let remoteStatusBarItem: vscode.StatusBarItem | null = null;
+let remoteToken: string | null = null;
+let remoteWebviewProvider: RemoteWebviewProvider | null = null;
 
 async function recalculateActiveColumns(
   totalColumns: number,
-  minColumnWidth: number
+  minColumnWidth: number,
+  fullWidthThreshold: number
 ): Promise<number> {
   const windowWidth = await detectWindowWidth();
-  return computeActiveColumns(windowWidth, minColumnWidth, totalColumns);
+  return computeActiveColumns(windowWidth, minColumnWidth, totalColumns, fullWidthThreshold);
 }
 
 export async function activate(
@@ -31,12 +42,13 @@ export async function activate(
   let totalColumns = config.get<number>("totalColumns", 4);
   let activeRatio = config.get<number>("activeRatio", 0.35);
   let inactiveRatio = config.get<number>("inactiveRatio", 0.1);
-  let minColumnWidth = config.get<number>("minColumnWidth", 400);
+  let minColumnWidth = config.get<number>("minColumnWidth", 850);
+  let fullWidthThreshold = config.get<number>("fullWidthThreshold", 3000);
 
   let activeColumns: number;
 
   try {
-    activeColumns = await recalculateActiveColumns(totalColumns, minColumnWidth);
+    activeColumns = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold);
   } catch (error) {
     activeColumns = totalColumns;
     vscode.window.showWarningMessage(
@@ -45,6 +57,16 @@ export async function activate(
   }
 
   outputChannel.appendLine(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}`);
+
+  // デバッグ: ログをファイルにも書き出す
+  const fs = require("fs");
+  const debugLogPath = "/tmp/editor-spotlighter-debug.log";
+  function debugLog(msg: string) {
+    const line = `${new Date().toISOString()} ${msg}\n`;
+    outputChannel.appendLine(msg);
+    fs.appendFileSync(debugLogPath, line);
+  }
+  debugLog(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}`);
 
   const refreshActiveColumns = () => {
     if (widthDetectTimer !== undefined) {
@@ -57,10 +79,11 @@ export async function activate(
       try {
         const newActiveColumns = await recalculateActiveColumns(
           totalColumns,
-          minColumnWidth
+          minColumnWidth,
+          fullWidthThreshold
         );
 
-        outputChannel.appendLine(`[refresh] newActiveColumns=${newActiveColumns}, current=${activeColumns}`);
+        debugLog(`[refresh] newActiveColumns=${newActiveColumns}, current=${activeColumns}`);
 
         if (newActiveColumns !== activeColumns) {
           activeColumns = newActiveColumns;
@@ -71,19 +94,19 @@ export async function activate(
           }
         }
       } catch (err) {
-        outputChannel.appendLine(`[refresh] error: ${(err as Error).message}`);
+        debugLog(`[refresh] error: ${(err as Error).message}`);
       }
     }, 500);
   };
 
   const onFocusChange = () => {
-    outputChannel.appendLine(`[focus] activeColumns=${activeColumns}, totalColumns=${totalColumns}, enabled=${enabled}`);
+    debugLog(`[focus] activeColumns=${activeColumns}, totalColumns=${totalColumns}, enabled=${enabled}`);
 
     if (!enabled) {
       return;
     }
 
-    outputChannel.appendLine(`[focus] activeColumns >= totalColumns check: ${activeColumns} >= ${totalColumns} = ${activeColumns >= totalColumns}`);
+    debugLog(`[focus] activeColumns >= totalColumns check: ${activeColumns} >= ${totalColumns} = ${activeColumns >= totalColumns}`);
     if (activeColumns >= totalColumns) {
       return;
     }
@@ -112,6 +135,7 @@ export async function activate(
       }
 
       const actualGroupCount = allGroups.length;
+      debugLog(`[layout] focusedGroupIndex=${focusedGroupIndex}, actualGroupCount=${actualGroupCount}, activeColumns=${activeColumns}`);
       let effectiveTotalColumns: number;
       if (actualGroupCount !== totalColumns) {
         effectiveTotalColumns = actualGroupCount;
@@ -148,7 +172,8 @@ export async function activate(
   };
 
   context.subscriptions.push(
-    vscode.window.onDidChangeActiveTextEditor(() => {
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      debugLog(`[editor-change] editor=${editor?.document?.fileName ?? 'none'}, viewColumn=${editor?.viewColumn ?? 'none'}`);
       onFocusChange();
     })
   );
@@ -228,6 +253,25 @@ export async function activate(
   });
   context.subscriptions.push(treeView);
 
+  // RemoteWebviewProvider の登録（サイドバー内WebView）
+  remoteWebviewProvider = new RemoteWebviewProvider();
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      RemoteWebviewProvider.viewType,
+      remoteWebviewProvider
+    )
+  );
+
+  remoteWebviewProvider.onDidReceiveMessage(async (message) => {
+    if (message.command === "start") {
+      if (!remoteServer) {
+        await startRemoteViewServer(context);
+      }
+    } else if (message.command === "stop") {
+      await stopRemoteViewServer();
+    }
+  });
+
   context.subscriptions.push(
     vscode.window.tabGroups.onDidChangeTabs(() => {
       tabTreeProvider.refresh();
@@ -299,6 +343,59 @@ export async function activate(
     )
   );
 
+  // spContinue: Open latest Claude Code session
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "editorSpotlighter.spContinue",
+      async () => {
+        try {
+          await vscode.commands.executeCommand(
+            "claude-vscode.editor.openLast"
+          );
+          vscode.window.showInformationMessage(
+            "Editor Spotlighter: Claude Codeのセッションを開きました"
+          );
+        } catch {
+          vscode.window.showInformationMessage(
+            "Editor Spotlighter: Claude Codeを手動で開いてください（Cmd+Shift+P → Claude Code: Open）"
+          );
+        }
+      }
+    )
+  );
+
+  // Remote View commands
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "editorSpotlighter.startRemoteView",
+      async () => {
+        if (remoteServer) {
+          vscode.window.showInformationMessage(
+            "Editor Spotlighter: Remote View is already running"
+          );
+          return;
+        }
+        await startRemoteViewServer(context);
+      }
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "editorSpotlighter.stopRemoteView",
+      async () => {
+        await stopRemoteViewServer();
+      }
+    )
+  );
+
+  // Auto-start remote view if enabled in settings
+  const remoteConfig = vscode.workspace.getConfiguration("editorSpotlighter");
+  const remoteEnabled = remoteConfig.get<boolean>("remoteView.enabled", false);
+  if (remoteEnabled) {
+    await startRemoteViewServer(context);
+  }
+
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (!e.affectsConfiguration("editorSpotlighter")) {
@@ -309,7 +406,8 @@ export async function activate(
       totalColumns = updated.get<number>("totalColumns", 4);
       activeRatio = updated.get<number>("activeRatio", 0.35);
       inactiveRatio = updated.get<number>("inactiveRatio", 0.1);
-      minColumnWidth = updated.get<number>("minColumnWidth", 400);
+      minColumnWidth = updated.get<number>("minColumnWidth", 850);
+      fullWidthThreshold = updated.get<number>("fullWidthThreshold", 3000);
 
       refreshActiveColumns();
 
@@ -346,6 +444,11 @@ export async function deactivate(): Promise<void> {
     widthDetectTimer = undefined;
   }
 
+  if (remoteServer) {
+    remoteServer.stopAll();
+  }
+  await stopRemoteViewServer();
+
   const config = vscode.workspace.getConfiguration("editorSpotlighter");
   const totalColumns = config.get<number>("totalColumns", 4);
   await resetToEqual(totalColumns);
@@ -360,6 +463,120 @@ async function resetToEqual(totalColumns: number): Promise<void> {
   };
   const layout = calculateLayout(layoutConfig, 0);
   await applyLayout(layout);
+}
+
+function getLocalIpAddress(): string {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    const ifaceList = interfaces[name];
+    if (!ifaceList) {
+      continue;
+    }
+    for (const iface of ifaceList) {
+      if (iface.family === "IPv4" && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return "localhost";
+}
+
+async function startRemoteViewServer(
+  context: vscode.ExtensionContext
+): Promise<void> {
+  const config = vscode.workspace.getConfiguration("editorSpotlighter");
+  const port = config.get<number>("remoteView.port", 19280);
+
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (!workspaceFolders || workspaceFolders.length === 0) {
+    vscode.window.showErrorMessage(
+      "Editor Spotlighter: No workspace folder open"
+    );
+    return;
+  }
+  const projectPath = workspaceFolders[0].uri.fsPath;
+
+  remoteToken = generateToken();
+  const token = remoteToken;
+  remoteServer = new RemoteViewServer(token, projectPath);
+
+  remoteServer.onClientMessage(async (msg) => {
+    if (msg.type === "type") {
+      await vscode.env.clipboard.writeText(msg.text);
+      try {
+        await vscode.commands.executeCommand("claude-vscode.focus");
+      } catch {
+        // Claude Code extension may not be installed
+      }
+      // Send Cmd+V and Enter via CGEvent
+      exec(`swift -e '
+import CoreGraphics
+import Foundation
+// Cmd+V (paste)
+let vDown = CGEvent(keyboardEventSource: nil, virtualKey: 0x09, keyDown: true)
+vDown?.flags = .maskCommand
+let vUp = CGEvent(keyboardEventSource: nil, virtualKey: 0x09, keyDown: false)
+vUp?.flags = .maskCommand
+vDown?.post(tap: .cghidEventTap)
+vUp?.post(tap: .cghidEventTap)
+// Small delay before Enter
+Thread.sleep(forTimeInterval: 0.1)
+// Enter
+let enterDown = CGEvent(keyboardEventSource: nil, virtualKey: 0x24, keyDown: true)
+let enterUp = CGEvent(keyboardEventSource: nil, virtualKey: 0x24, keyDown: false)
+enterDown?.post(tap: .cghidEventTap)
+enterUp?.post(tap: .cghidEventTap)
+'`);
+    }
+  });
+
+  try {
+    await remoteServer.start(port);
+  } catch (error) {
+    remoteServer = null;
+    vscode.window.showErrorMessage(
+      `Editor Spotlighter: Failed to start Remote View server. (${(error as Error).message})`
+    );
+    throw error;
+  }
+
+  remoteStatusBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    100
+  );
+  remoteStatusBarItem.text = `$(remote) Remote: ${port}`;
+  remoteStatusBarItem.tooltip = `http://localhost:${port}/?token=${token}`;
+  remoteStatusBarItem.command = "editorSpotlighter.stopRemoteView";
+  remoteStatusBarItem.show();
+  context.subscriptions.push(remoteStatusBarItem);
+
+  // QRコードをサイドバーのWebViewに表示
+  const localIp = getLocalIpAddress();
+  const url = `http://${localIp}:${port}/?token=${token}`;
+  const qrSvg = await QRCode.toString(url, { type: "svg" });
+
+  if (remoteWebviewProvider) {
+    remoteWebviewProvider.setRunning(qrSvg, url);
+  }
+
+  vscode.window.showInformationMessage(
+    `Editor Spotlighter: Remote View started on port ${port}`
+  );
+}
+
+async function stopRemoteViewServer(): Promise<void> {
+  if (remoteServer) {
+    await remoteServer.stop();
+    remoteServer = null;
+  }
+  remoteToken = null;
+  if (remoteStatusBarItem) {
+    remoteStatusBarItem.dispose();
+    remoteStatusBarItem = null;
+  }
+  if (remoteWebviewProvider) {
+    remoteWebviewProvider.setStopped();
+  }
 }
 
 async function applyTabSettings(
