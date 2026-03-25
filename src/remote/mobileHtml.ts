@@ -156,6 +156,29 @@ export function getMobileHtml(wsUrl: string): string {
     display: block;
   }
 
+  #closeBtn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 32px;
+    height: 32px;
+    background: rgba(0,0,0,0.5);
+    color: #fff;
+    border: none;
+    border-radius: 50%;
+    font-size: 18px;
+    cursor: pointer;
+    z-index: 15;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  #closeBtn:active {
+    background: rgba(0,0,0,0.7);
+  }
+
   .no-tabs {
     display: none;
   }
@@ -167,6 +190,7 @@ export function getMobileHtml(wsUrl: string): string {
 
 <div class="app">
   <div id="screen">
+    <button id="closeBtn" aria-label="Close">&times;</button>
     <img id="frame" />
   </div>
 
@@ -185,6 +209,7 @@ export function getMobileHtml(wsUrl: string): string {
   var frame = document.getElementById('frame');
   var textInput = document.getElementById('textInput');
   var sendBtn = document.getElementById('sendBtn');
+  var closeBtn = document.getElementById('closeBtn');
   var reconnectBanner = document.getElementById('reconnectBanner');
   var tabBar = document.getElementById('tabBar');
   var ws = null;
@@ -296,6 +321,13 @@ export function getMobileHtml(wsUrl: string): string {
     if (e.key === 'Enter') {
       sendBtn.click();
     }
+  });
+
+  closeBtn.addEventListener('click', function() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'disconnect' }));
+    }
+    document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-size:16px;color:#6b7280;">Disconnected</div>';
   });
 
   connect();

@@ -345,6 +345,15 @@ mouseUp?.post(tap: .cghidEventTap)
 
       if (message.type === "click") {
         this.handleClick(message.x, message.y);
+      } else if (message.type === "disconnect") {
+        // スマホから明示的切断 → 全クライアント閉じてキャプチャ停止+復元
+        for (const client of this.wss!.clients) {
+          client.close();
+        }
+        this.stopCapture();
+        if (this.disconnectCallback) {
+          this.disconnectCallback();
+        }
       } else if (message.type === "type" || message.type === "switchTab") {
         if (this.messageCallback) {
           this.messageCallback(message);

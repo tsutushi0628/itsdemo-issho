@@ -14,4 +14,5 @@ export interface TabInfo {
 export type ClientMessage =
   | { type: "click"; x: number; y: number }
   | { type: "type"; text: string }
-  | { type: "switchTab"; groupIndex: number; tabIndex: number };
+  | { type: "switchTab"; groupIndex: number; tabIndex: number }
+  | { type: "disconnect" };
