@@ -270,7 +270,7 @@ mouseUp?.post(tap: .cghidEventTap)
     req: http.IncomingMessage,
     res: http.ServerResponse
   ): void {
-    if (!this.isPrivateIp(req)) {
+    if (!this.isAllowedAccess(req)) {
       res.writeHead(403, { "Content-Type": "text/plain" });
       res.end("Forbidden: Only LAN access is allowed");
       return;
@@ -304,7 +304,7 @@ mouseUp?.post(tap: .cghidEventTap)
     ws: WebSocket,
     req: http.IncomingMessage
   ): void {
-    if (!this.isPrivateIp(req)) {
+    if (!this.isAllowedAccess(req)) {
       ws.close(4003, "Forbidden: Only LAN access is allowed");
       return;
     }
@@ -372,7 +372,12 @@ mouseUp?.post(tap: .cghidEventTap)
     });
   }
 
-  private isPrivateIp(req: http.IncomingMessage): boolean {
+  private isAllowedAccess(req: http.IncomingMessage): boolean {
+    // Cloudflare Tunnel経由のアクセスを許可
+    if (req.headers["cf-connecting-ip"] || req.headers["cf-ray"]) {
+      return true;
+    }
+
     const remoteAddress =
       req.socket.remoteAddress ?? (req.connection as net.Socket).remoteAddress;
     if (!remoteAddress) {

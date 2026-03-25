@@ -311,18 +311,37 @@ export async function activate(
   context.subscriptions.push(treeView);
 
   // モバイル接続時のコールバック定義
-  const handleMobileConnect = () => {
+  const handleMobileConnect = async () => {
+    debugLog("[mobile] connected — closing sidebar, setting activeColumns=1");
     savedActiveColumns = activeColumns;
     activeColumns = 1;
+
+    // サイドバーを閉じて完了を待つ
+    await vscode.commands.executeCommand("workbench.action.closeSidebar");
+    // サイドバー閉じが反映されるまで少し待つ
+    await new Promise(resolve => setTimeout(resolve, 300));
+
     onFocusChange();
   };
 
-  const handleMobileDisconnect = () => {
+  const handleMobileDisconnect = async () => {
+    debugLog("[mobile] disconnected — restoring sidebar and activeColumns");
     if (savedActiveColumns !== null) {
       activeColumns = savedActiveColumns;
       savedActiveColumns = null;
     }
-    onFocusChange();
+    mobileConnected = false;
+
+    // サイドバーを復元
+    await vscode.commands.executeCommand("workbench.action.toggleSidebarVisibility");
+
+    // クロップ解除
+    if (remoteServer) {
+      remoteServer.clearCropRegion();
+    }
+
+    // 等間隔に戻す
+    await resetToEqual(totalColumns);
   };
 
   // RemoteWebviewProvider の登録（サイドバー内WebView）
@@ -577,27 +596,12 @@ async function startRemoteViewServer(
 
   remoteServer.onFirstConnect(() => {
     mobileConnected = true;
-
-    // サイドバーを閉じる
-    vscode.commands.executeCommand("workbench.action.closeSidebar");
-
-    // アコーディオンをactiveColumns=1に強制
     if (onMobileConnect) {
       onMobileConnect();
     }
   });
 
   remoteServer.onAllDisconnect(() => {
-    mobileConnected = false;
-
-    // サイドバーを復元
-    vscode.commands.executeCommand("workbench.action.toggleSidebarVisibility");
-
-    // クロップ解除
-    if (remoteServer) {
-      remoteServer.clearCropRegion();
-    }
-
     if (onMobileDisconnect) {
       onMobileDisconnect();
     }
