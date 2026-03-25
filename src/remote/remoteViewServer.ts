@@ -175,12 +175,21 @@ export class RemoteViewServer {
     const result = execSync(`swift -e '
 import CoreGraphics
 let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
+var bestId: Int = 0
+var maxWidth: Double = 0
 for w in list {
     if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code",
-       let id = w["kCGWindowNumber"] as? Int {
-        print(id)
-        break
+       let id = w["kCGWindowNumber"] as? Int,
+       let bounds = w["kCGWindowBounds"] as? [String: Any],
+       let width = bounds["Width"] as? Double {
+        if width > maxWidth {
+            maxWidth = width
+            bestId = id
+        }
     }
+}
+if bestId > 0 {
+    print(bestId)
 }
 '`).toString().trim();
     return result;
@@ -190,16 +199,24 @@ for w in list {
     const result = execSync(`swift -e '
 import CoreGraphics
 let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
+var bestWindow: [String: Any]? = nil
+var maxWidth: Double = 0
 for w in list {
     if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code",
        let bounds = w["kCGWindowBounds"] as? [String: Any],
-       let x = bounds["X"] as? Double,
-       let y = bounds["Y"] as? Double,
-       let width = bounds["Width"] as? Double,
-       let height = bounds["Height"] as? Double {
-        print("\\(x),\\(y),\\(width),\\(height)")
-        break
+       let width = bounds["Width"] as? Double {
+        if width > maxWidth {
+            maxWidth = width
+            bestWindow = bounds
+        }
     }
+}
+if let b = bestWindow,
+   let x = b["X"] as? Double,
+   let y = b["Y"] as? Double,
+   let w = b["Width"] as? Double,
+   let h = b["Height"] as? Double {
+    print("\\(x),\\(y),\\(w),\\(h)")
 }
 '`).toString().trim();
     const parts = result.split(",");

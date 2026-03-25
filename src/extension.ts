@@ -118,6 +118,7 @@ export async function activate(
         debugLog(`[refresh] newActiveColumns=${newActiveColumns}, current=${activeColumns}`);
 
         if (newActiveColumns !== activeColumns) {
+          debugLog(`[refresh] changing activeColumns: ${activeColumns} -> ${newActiveColumns}`);
           activeColumns = newActiveColumns;
           if (activeColumns >= totalColumns) {
             await resetToEqual(totalColumns);
@@ -596,25 +597,15 @@ async function startRemoteViewServer(
       } catch {
         // Claude Code extension may not be installed
       }
-      // Send Cmd+V and Enter via CGEvent
-      exec(`swift -e '
-import CoreGraphics
-import Foundation
-// Cmd+V (paste)
-let vDown = CGEvent(keyboardEventSource: nil, virtualKey: 0x09, keyDown: true)
-vDown?.flags = .maskCommand
-let vUp = CGEvent(keyboardEventSource: nil, virtualKey: 0x09, keyDown: false)
-vUp?.flags = .maskCommand
-vDown?.post(tap: .cghidEventTap)
-vUp?.post(tap: .cghidEventTap)
-// Small delay before Enter
-Thread.sleep(forTimeInterval: 0.1)
-// Enter
-let enterDown = CGEvent(keyboardEventSource: nil, virtualKey: 0x24, keyDown: true)
-let enterUp = CGEvent(keyboardEventSource: nil, virtualKey: 0x24, keyDown: false)
-enterDown?.post(tap: .cghidEventTap)
-enterUp?.post(tap: .cghidEventTap)
-'`);
+      // osascriptで Cmd+V → Enter を送信
+      exec(`osascript -e 'delay 0.3' -e 'tell application "System Events" to keystroke "v" using command down' -e 'delay 0.2' -e 'tell application "System Events" to keystroke return'`, (err) => {
+        if (err) {
+          console.error(`[Editor Spotlighter][type] osascript error: ${err.message}`);
+          vscode.window.showWarningMessage(
+            "Editor Spotlighter: テキスト送信にはアクセシビリティ権限が必要です。システム設定 → プライバシーとセキュリティ → アクセシビリティ で Visual Studio Code を許可してください。"
+          );
+        }
+      });
     } else if (msg.type === "switchTab") {
       const groups = vscode.window.tabGroups.all;
       if (msg.groupIndex < groups.length) {

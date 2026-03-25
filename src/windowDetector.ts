@@ -12,16 +12,24 @@ export function getWindowBounds(): Promise<WindowBounds> {
     const swiftScript = `
 import CoreGraphics
 let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
+var bestWindow: [String: Any]? = nil
+var maxWidth: Double = 0
 for w in list {
     if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code",
        let bounds = w["kCGWindowBounds"] as? [String: Any],
-       let x = bounds["X"] as? Double,
-       let y = bounds["Y"] as? Double,
-       let width = bounds["Width"] as? Double,
-       let height = bounds["Height"] as? Double {
-        print("\\(x),\\(y),\\(width),\\(height)")
-        break
+       let width = bounds["Width"] as? Double {
+        if width > maxWidth {
+            maxWidth = width
+            bestWindow = bounds
+        }
     }
+}
+if let b = bestWindow,
+   let x = b["X"] as? Double,
+   let y = b["Y"] as? Double,
+   let w = b["Width"] as? Double,
+   let h = b["Height"] as? Double {
+    print("\\(x),\\(y),\\(w),\\(h)")
 }
 `;
 
@@ -53,17 +61,19 @@ export function detectWindowWidth(): Promise<number> {
       // macOS: Swift CGWindowList API（アクセシビリティ権限不要）
       const swiftScript = `
 import CoreGraphics
-import Foundation
-
-let windowList = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
-for window in windowList {
-    if let owner = window["kCGWindowOwnerName"] as? String, owner == "Code" {
-        if let bounds = window["kCGWindowBounds"] as? [String: Any] {
-            let width = bounds["Width"] as? Int ?? 0
-            print(width)
-            break
+let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
+var maxWidth: Double = 0
+for w in list {
+    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code",
+       let bounds = w["kCGWindowBounds"] as? [String: Any],
+       let width = bounds["Width"] as? Double {
+        if width > maxWidth {
+            maxWidth = width
         }
     }
+}
+if maxWidth > 0 {
+    print(Int(maxWidth))
 }
 `;
 
