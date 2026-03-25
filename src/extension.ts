@@ -18,7 +18,6 @@ let remoteStatusBarItem: vscode.StatusBarItem | null = null;
 let remoteToken: string | null = null;
 let remoteWebviewProvider: RemoteWebviewProvider | null = null;
 let mobileConnected = false;
-let savedActiveColumns: number | null = null;
 let previousActiveViewColumn: number = 1;
 let openInNextColumn = true;
 
@@ -59,6 +58,48 @@ async function updateCropRegion(
 
   remoteServer.setCropRegion(
     Math.round(activityBarWidth + offsetX),
+    0,
+    Math.round(columnWidth),
+    Math.round(bounds.height)
+  );
+}
+
+async function updateCropRegionFromCurrentState(): Promise<void> {
+  if (!remoteServer || !mobileConnected) {
+    return;
+  }
+
+  let bounds: import("./windowDetector").WindowBounds;
+  try {
+    bounds = await getWindowBounds();
+  } catch {
+    return;
+  }
+
+  const tabGroups = vscode.window.tabGroups;
+  const allGroups = tabGroups.all;
+  const activeGroup = tabGroups.activeTabGroup;
+
+  let activeIndex = -1;
+  for (let i = 0; i < allGroups.length; i++) {
+    if (allGroups[i] === activeGroup) {
+      activeIndex = i;
+      break;
+    }
+  }
+  if (activeIndex < 0) {
+    return;
+  }
+
+  // エディタ領域の計算: アクティビティバー(48px)を除いた幅をグループ数で均等分割
+  const activityBarWidth = 48;
+  const editorWidth = bounds.width - activityBarWidth;
+  const groupCount = allGroups.length;
+  const columnWidth = editorWidth / groupCount;
+  const offsetX = activityBarWidth + activeIndex * columnWidth;
+
+  remoteServer.setCropRegion(
+    Math.round(offsetX),
     0,
     Math.round(columnWidth),
     Math.round(bounds.height)
@@ -232,6 +273,11 @@ export async function activate(
       }
 
       onFocusChange();
+
+      // モバイル接続中は常にcropRegionを更新（アコーディオンなしの場合もカバー）
+      if (mobileConnected && remoteServer) {
+        updateCropRegionFromCurrentState();
+      }
     })
   );
 
@@ -312,36 +358,17 @@ export async function activate(
 
   // モバイル接続時のコールバック定義
   const handleMobileConnect = async () => {
-    debugLog("[mobile] connected — closing sidebar, setting activeColumns=1");
-    savedActiveColumns = activeColumns;
-    activeColumns = 1;
-
-    // サイドバーを閉じて完了を待つ
-    await vscode.commands.executeCommand("workbench.action.closeSidebar");
-    // サイドバー閉じが反映されるまで少し待つ
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    onFocusChange();
+    debugLog("[mobile] connected");
+    mobileConnected = true;
+    // PCのレイアウトは変えない。次回フォーカス変更時にcropRegionが設定される
   };
 
   const handleMobileDisconnect = async () => {
-    debugLog("[mobile] disconnected — restoring sidebar and activeColumns");
-    if (savedActiveColumns !== null) {
-      activeColumns = savedActiveColumns;
-      savedActiveColumns = null;
-    }
+    debugLog("[mobile] disconnected");
     mobileConnected = false;
-
-    // サイドバーを復元
-    await vscode.commands.executeCommand("workbench.action.toggleSidebarVisibility");
-
-    // クロップ解除
     if (remoteServer) {
       remoteServer.clearCropRegion();
     }
-
-    // 等間隔に戻す
-    await resetToEqual(totalColumns);
   };
 
   // RemoteWebviewProvider の登録（サイドバー内WebView）
