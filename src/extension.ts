@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as os from "os";
 import { exec } from "child_process";
 import QRCode from "qrcode";
-import { detectWindowWidth, getWindowBounds } from "./windowDetector";
+import { detectWindowWidth } from "./windowDetector";
 import { computeActiveColumns } from "./columnCalculator";
 import { calculateLayout, applyLayout, LayoutConfig } from "./layoutEngine";
 import { TabTreeProvider } from "./tabTreeProvider";
@@ -30,49 +30,8 @@ async function recalculateActiveColumns(
   return computeActiveColumns(windowWidth, minColumnWidth, totalColumns, fullWidthThreshold);
 }
 
-async function updateCropRegion(
-  layout: import("./layoutEngine").EditorLayout,
-  focusedGroupIndex: number
-): Promise<void> {
+async function updateViewport(): Promise<void> {
   if (!remoteServer || !mobileConnected) {
-    return;
-  }
-
-  let bounds: import("./windowDetector").WindowBounds;
-  try {
-    bounds = await getWindowBounds();
-  } catch {
-    return;
-  }
-
-  // アクティビティバー幅（48px）を除いたエディタ領域
-  const activityBarWidth = 48;
-  const editorWidth = bounds.width - activityBarWidth;
-
-  // フォーカスされたカラムのオフセットと幅を計算
-  let offsetX = 0;
-  for (let i = 0; i < focusedGroupIndex; i++) {
-    offsetX += layout.groups[i].size * editorWidth;
-  }
-  const columnWidth = layout.groups[focusedGroupIndex].size * editorWidth;
-
-  remoteServer.setCropRegion(
-    Math.round(activityBarWidth + offsetX),
-    0,
-    Math.round(columnWidth),
-    Math.round(bounds.height)
-  );
-}
-
-async function updateCropRegionFromCurrentState(): Promise<void> {
-  if (!remoteServer || !mobileConnected) {
-    return;
-  }
-
-  let bounds: import("./windowDetector").WindowBounds;
-  try {
-    bounds = await getWindowBounds();
-  } catch {
     return;
   }
 
@@ -91,19 +50,12 @@ async function updateCropRegionFromCurrentState(): Promise<void> {
     return;
   }
 
-  // エディタ領域の計算: アクティビティバー(48px)を除いた幅をグループ数で均等分割
-  const activityBarWidth = 48;
-  const editorWidth = bounds.width - activityBarWidth;
+  // グループ均等分割で表示領域の比率を計算
   const groupCount = allGroups.length;
-  const columnWidth = editorWidth / groupCount;
-  const offsetX = activityBarWidth + activeIndex * columnWidth;
+  const viewportWidth = 1 / groupCount;
+  const viewportX = activeIndex / groupCount;
 
-  remoteServer.setCropRegion(
-    Math.round(offsetX),
-    0,
-    Math.round(columnWidth),
-    Math.round(bounds.height)
-  );
+  remoteServer.setViewport(viewportX, 0, viewportWidth, 1.0);
 }
 
 export async function activate(
@@ -241,7 +193,7 @@ export async function activate(
       (async () => {
         try {
           await applyLayout(layout);
-          await updateCropRegion(layout, focusedGroupIndex);
+          await updateViewport();
         } catch (error) {
           vscode.window.showWarningMessage(
             `Editor Spotlighter: レイアウト適用に失敗しました。(${(error as Error).message})`
@@ -274,9 +226,9 @@ export async function activate(
 
       onFocusChange();
 
-      // モバイル接続中は常にcropRegionを更新（アコーディオンなしの場合もカバー）
+      // モバイル接続中は常にviewportを更新（アコーディオンなしの場合もカバー）
       if (mobileConnected && remoteServer) {
-        updateCropRegionFromCurrentState();
+        updateViewport();
       }
     })
   );
@@ -360,14 +312,16 @@ export async function activate(
   const handleMobileConnect = async () => {
     debugLog("[mobile] connected");
     mobileConnected = true;
-    // PCのレイアウトは変えない。次回フォーカス変更時にcropRegionが設定される
+    // 接続直後にviewportを設定
+    await updateViewport();
+    debugLog("[mobile] viewport set");
   };
 
   const handleMobileDisconnect = async () => {
     debugLog("[mobile] disconnected");
     mobileConnected = false;
     if (remoteServer) {
-      remoteServer.clearCropRegion();
+      remoteServer.clearViewport();
     }
   };
 

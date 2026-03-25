@@ -23,7 +23,7 @@ export class RemoteViewServer {
   private windowId: string | null = null;
   private messageCallback: ((msg: ClientMessage) => void) | null = null;
   private currentTabs: TabInfo[] = [];
-  private cropRegion: {
+  private viewport: {
     x: number;
     y: number;
     width: number;
@@ -58,17 +58,37 @@ export class RemoteViewServer {
     this.messageCallback = callback;
   }
 
-  setCropRegion(
+  setViewport(
     x: number,
     y: number,
     width: number,
     height: number
   ): void {
-    this.cropRegion = { x, y, width, height };
+    this.viewport = { x, y, width, height };
+    this.broadcastViewport();
   }
 
-  clearCropRegion(): void {
-    this.cropRegion = null;
+  clearViewport(): void {
+    this.viewport = null;
+  }
+
+  private broadcastViewport(): void {
+    if (!this.wss || this.wss.clients.size === 0 || !this.viewport) {
+      return;
+    }
+    const msg: ServerMessage = {
+      type: "viewport",
+      x: this.viewport.x,
+      y: this.viewport.y,
+      width: this.viewport.width,
+      height: this.viewport.height,
+    };
+    const payload = JSON.stringify(msg);
+    for (const client of this.wss.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(payload);
+      }
+    }
   }
 
   onFirstConnect(callback: () => void): void {
@@ -208,30 +228,12 @@ for w in list {
       }
 
       exec(
-        `screencapture -x -o -l ${this.windowId} -t jpg /tmp/es-frame-full.jpg`,
+        `screencapture -x -o -l ${this.windowId} -t jpg /tmp/es-frame.jpg`,
         (err) => {
           if (err) {
             return;
           }
-
-          if (this.cropRegion) {
-            exec(
-              `sips --cropToHeightWidth ${this.cropRegion.height} ${this.cropRegion.width} --cropOffset ${this.cropRegion.y} ${this.cropRegion.x} /tmp/es-frame-full.jpg --out /tmp/es-frame.jpg`,
-              (cropErr) => {
-                if (cropErr) {
-                  return;
-                }
-                this.sendFrame();
-              }
-            );
-          } else {
-            exec(
-              "cp /tmp/es-frame-full.jpg /tmp/es-frame.jpg",
-              () => {
-                this.sendFrame();
-              }
-            );
-          }
+          this.sendFrame();
         }
       );
     }, 500);
@@ -328,10 +330,20 @@ mouseUp?.post(tap: .cghidEventTap)
       this.connectCallback();
     }
 
-    // 接続時にタブ情報を即座に送信
+    // 接続時にタブ情報とviewportを即座に送信
     if (this.currentTabs.length > 0) {
       const tabMsg: ServerMessage = { type: "tabs", data: this.currentTabs };
       ws.send(JSON.stringify(tabMsg));
+    }
+    if (this.viewport) {
+      const vpMsg: ServerMessage = {
+        type: "viewport",
+        x: this.viewport.x,
+        y: this.viewport.y,
+        width: this.viewport.width,
+        height: this.viewport.height,
+      };
+      ws.send(JSON.stringify(vpMsg));
     }
 
     ws.on("message", (rawData) => {

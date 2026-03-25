@@ -25,7 +25,7 @@ export function getMobileHtml(wsUrl: string): string {
 
   #screen {
     flex: 1;
-    overflow: auto;
+    overflow: hidden;
     -webkit-overflow-scrolling: touch;
     touch-action: pan-x pan-y pinch-zoom;
     background: #f8f9fa;
@@ -36,8 +36,7 @@ export function getMobileHtml(wsUrl: string): string {
     width: 100%;
     height: auto;
     display: block;
-    transform-origin: 0 0;
-    transition: transform 0.2s ease;
+    transition: width 0.2s ease, margin-left 0.2s ease;
   }
 
   #tabBar {
@@ -215,25 +214,7 @@ export function getMobileHtml(wsUrl: string): string {
   var ws = null;
   var reconnectTimer = null;
 
-  // ダブルタップでズームのトグル
-  var zoomScale = 1;
-  var lastTapTime = 0;
-
-  frame.addEventListener('touchend', function(e) {
-    var now = Date.now();
-    if (now - lastTapTime < 300) {
-      e.preventDefault();
-      if (zoomScale === 1) {
-        zoomScale = 2;
-      } else {
-        zoomScale = 1;
-      }
-      frame.style.transform = 'scale(' + zoomScale + ')';
-      lastTapTime = 0;
-    } else {
-      lastTapTime = now;
-    }
-  });
+  // ダブルタップは将来のスクロール調整用に予約
 
   function connect() {
     ws = new WebSocket('${wsUrl}');
@@ -258,6 +239,10 @@ export function getMobileHtml(wsUrl: string): string {
         frame.src = msg.data;
       } else if (msg.type === 'tabs') {
         renderTabs(msg.data);
+      } else if (msg.type === 'viewport') {
+        var scale = 1 / msg.width;
+        frame.style.width = (scale * 100) + '%';
+        frame.style.marginLeft = (-msg.x * scale * 100) + '%';
       }
     };
   }

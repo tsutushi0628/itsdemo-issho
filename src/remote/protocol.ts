@@ -1,7 +1,8 @@
 // PC -> スマホ
 export type ServerMessage =
   | { type: "frame"; data: string }
-  | { type: "tabs"; data: TabInfo[] };
+  | { type: "tabs"; data: TabInfo[] }
+  | { type: "viewport"; x: number; y: number; width: number; height: number };
 
 export interface TabInfo {
   groupIndex: number;
