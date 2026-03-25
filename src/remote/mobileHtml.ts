@@ -3,7 +3,7 @@ export function getMobileHtml(wsUrl: string): string {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes">
 <title>Editor Spotlighter Remote</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -17,28 +17,72 @@ export function getMobileHtml(wsUrl: string): string {
     -webkit-text-size-adjust: 100%;
   }
 
+  .app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
   #screen {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 56px;
+    flex: 1;
     overflow: auto;
     -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y pinch-zoom;
     background: #f8f9fa;
+    position: relative;
   }
 
   #frame {
     width: 100%;
     height: auto;
     display: block;
+    transform-origin: 0 0;
+    transition: transform 0.2s ease;
+  }
+
+  #tabBar {
+    display: flex;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    background: #f3f4f6;
+    border-top: 1px solid #e5e7eb;
+    min-height: 44px;
+    flex-shrink: 0;
+    scrollbar-width: none;
+  }
+
+  #tabBar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tab-item {
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    white-space: nowrap;
+    font-size: 13px;
+    color: #6b7280;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    flex-shrink: 0;
+    min-height: 44px;
+    transition: color 0.15s, border-color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+
+  .tab-item:active {
+    background: #e5e7eb;
+  }
+
+  .tab-item.active {
+    color: #7c3aed;
+    border-bottom-color: #7c3aed;
+    font-weight: 600;
   }
 
   #inputBar {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
+    flex-shrink: 0;
     padding: 8px 12px calc(env(safe-area-inset-bottom, 8px) + 8px);
     background: #ffffff;
     border-top: 1px solid #e5e7eb;
@@ -111,20 +155,28 @@ export function getMobileHtml(wsUrl: string): string {
   .reconnecting-banner.visible {
     display: block;
   }
+
+  .no-tabs {
+    display: none;
+  }
 </style>
 </head>
 <body>
 
 <div class="reconnecting-banner" id="reconnectBanner">Reconnecting...</div>
 
-<div id="screen">
-  <img id="frame" />
-</div>
+<div class="app">
+  <div id="screen">
+    <img id="frame" />
+  </div>
 
-<div id="inputBar">
-  <div class="input-row">
-    <input id="textInput" type="text" placeholder="Type here..." />
-    <button id="sendBtn">&#9654;</button>
+  <div id="tabBar" class="no-tabs"></div>
+
+  <div id="inputBar">
+    <div class="input-row">
+      <input id="textInput" type="text" placeholder="Type here..." />
+      <button id="sendBtn">&#9654;</button>
+    </div>
   </div>
 </div>
 
@@ -134,8 +186,29 @@ export function getMobileHtml(wsUrl: string): string {
   var textInput = document.getElementById('textInput');
   var sendBtn = document.getElementById('sendBtn');
   var reconnectBanner = document.getElementById('reconnectBanner');
+  var tabBar = document.getElementById('tabBar');
   var ws = null;
   var reconnectTimer = null;
+
+  // ダブルタップでズームのトグル
+  var zoomScale = 1;
+  var lastTapTime = 0;
+
+  frame.addEventListener('touchend', function(e) {
+    var now = Date.now();
+    if (now - lastTapTime < 300) {
+      e.preventDefault();
+      if (zoomScale === 1) {
+        zoomScale = 2;
+      } else {
+        zoomScale = 1;
+      }
+      frame.style.transform = 'scale(' + zoomScale + ')';
+      lastTapTime = 0;
+    } else {
+      lastTapTime = now;
+    }
+  });
 
   function connect() {
     ws = new WebSocket('${wsUrl}');
@@ -158,8 +231,49 @@ export function getMobileHtml(wsUrl: string): string {
       var msg = JSON.parse(e.data);
       if (msg.type === 'frame') {
         frame.src = msg.data;
+      } else if (msg.type === 'tabs') {
+        renderTabs(msg.data);
       }
     };
+  }
+
+  function renderTabs(tabs) {
+    if (!tabs || tabs.length === 0) {
+      tabBar.className = 'no-tabs';
+      tabBar.textContent = '';
+      return;
+    }
+
+    tabBar.className = '';
+    tabBar.id = 'tabBar';
+    tabBar.textContent = '';
+
+    for (var i = 0; i < tabs.length; i++) {
+      var tab = tabs[i];
+      var el = document.createElement('div');
+      el.className = 'tab-item';
+      if (tab.isActive) {
+        el.className = 'tab-item active';
+      }
+      el.textContent = tab.label;
+      el.dataset.groupIndex = tab.groupIndex;
+      el.dataset.tabIndex = tab.tabIndex;
+      el.addEventListener('click', function() {
+        if (!ws || ws.readyState !== WebSocket.OPEN) { return; }
+        ws.send(JSON.stringify({
+          type: 'switchTab',
+          groupIndex: parseInt(this.dataset.groupIndex, 10),
+          tabIndex: parseInt(this.dataset.tabIndex, 10)
+        }));
+      });
+      tabBar.appendChild(el);
+    }
+
+    // アクティブタブを表示領域にスクロール
+    var activeEl = tabBar.querySelector('.tab-item.active');
+    if (activeEl) {
+      activeEl.scrollIntoView({ inline: 'center', block: 'nearest' });
+    }
   }
 
   frame.addEventListener('click', function(e) {

@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { exec, execSync } from "child_process";
 import { validateToken } from "./tokenAuth";
 import { getMobileHtml } from "./mobileHtml";
-import { ClientMessage, ServerMessage } from "./protocol";
+import { ClientMessage, ServerMessage, TabInfo } from "./protocol";
 import net from "net";
 
 interface WindowBounds {
@@ -22,9 +22,28 @@ export class RemoteViewServer {
   private captureInterval: NodeJS.Timeout | null = null;
   private windowId: string | null = null;
   private messageCallback: ((msg: ClientMessage) => void) | null = null;
+  private currentTabs: TabInfo[] = [];
 
   constructor(token: string, _projectPath: string) {
     this.token = token;
+  }
+
+  setTabInfo(tabs: TabInfo[]): void {
+    this.currentTabs = tabs;
+    this.broadcastTabs();
+  }
+
+  private broadcastTabs(): void {
+    if (!this.wss || this.wss.clients.size === 0) {
+      return;
+    }
+    const msg: ServerMessage = { type: "tabs", data: this.currentTabs };
+    const payload = JSON.stringify(msg);
+    for (const client of this.wss.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(payload);
+      }
+    }
   }
 
   onClientMessage(callback: (msg: ClientMessage) => void): void {
@@ -256,6 +275,12 @@ mouseUp?.post(tap: .cghidEventTap)
     // 最初のクライアント接続でキャプチャ開始
     this.startCapture();
 
+    // 接続時にタブ情報を即座に送信
+    if (this.currentTabs.length > 0) {
+      const tabMsg: ServerMessage = { type: "tabs", data: this.currentTabs };
+      ws.send(JSON.stringify(tabMsg));
+    }
+
     ws.on("message", (rawData) => {
       const data = rawData.toString();
       let message: ClientMessage;
@@ -267,7 +292,7 @@ mouseUp?.post(tap: .cghidEventTap)
 
       if (message.type === "click") {
         this.handleClick(message.x, message.y);
-      } else if (message.type === "type") {
+      } else if (message.type === "type" || message.type === "switchTab") {
         if (this.messageCallback) {
           this.messageCallback(message);
         }

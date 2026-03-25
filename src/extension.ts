@@ -527,6 +527,21 @@ let enterUp = CGEvent(keyboardEventSource: nil, virtualKey: 0x24, keyDown: false
 enterDown?.post(tap: .cghidEventTap)
 enterUp?.post(tap: .cghidEventTap)
 '`);
+    } else if (msg.type === "switchTab") {
+      const groups = vscode.window.tabGroups.all;
+      if (msg.groupIndex < groups.length) {
+        const group = groups[msg.groupIndex];
+        if (msg.tabIndex < group.tabs.length) {
+          const tab = group.tabs[msg.tabIndex];
+          const input = tab.input;
+          if (input instanceof vscode.TabInputText) {
+            await vscode.window.showTextDocument(input.uri, {
+              viewColumn: group.viewColumn,
+              preview: false,
+            });
+          }
+        }
+      }
     }
   });
 
@@ -566,9 +581,46 @@ enterUp?.post(tap: .cghidEventTap)
     remoteWebviewProvider.setRunning(qrSvg, url);
   }
 
+  // タブ情報の初期送信とイベントリスナー登録
+  updateRemoteTabs();
+  context.subscriptions.push(
+    vscode.window.tabGroups.onDidChangeTabs(() => updateRemoteTabs())
+  );
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(() => updateRemoteTabs())
+  );
+
   vscode.window.showInformationMessage(
     `Editor Spotlighter: Remote View started on port ${port}`
   );
+}
+
+function updateRemoteTabs(): void {
+  if (!remoteServer) {
+    return;
+  }
+  const tabs = [];
+  for (const group of vscode.window.tabGroups.all) {
+    const groupIndex = vscode.window.tabGroups.all.indexOf(group);
+    for (let i = 0; i < group.tabs.length; i++) {
+      const tab = group.tabs[i];
+      const input = tab.input;
+      let label = tab.label;
+      if (input instanceof vscode.TabInputText) {
+        const fileName = input.uri.path.split("/").pop();
+        if (fileName) {
+          label = fileName;
+        }
+      }
+      tabs.push({
+        groupIndex,
+        tabIndex: i,
+        label,
+        isActive: tab.isActive,
+      });
+    }
+  }
+  remoteServer.setTabInfo(tabs);
 }
 
 async function stopRemoteViewServer(): Promise<void> {
