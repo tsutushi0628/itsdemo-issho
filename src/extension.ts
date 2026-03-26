@@ -99,6 +99,17 @@ export async function activate(
   }
   debugLog(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}`);
 
+  // ウィンドウ幅の再取得（整形ボタン or 初回のみ）
+  const refreshWindowWidth = async () => {
+    try {
+      const newActiveColumns = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold);
+      activeColumns = newActiveColumns;
+      debugLog(`[width-refresh] activeColumns=${activeColumns}`);
+    } catch {
+      // 取得失敗時は前の値を維持
+    }
+  };
+
   const onFocusChange = () => {
     if (!enabled) {
       return;
@@ -110,14 +121,6 @@ export async function activate(
 
     debounceTimer = setTimeout(async () => {
       debounceTimer = undefined;
-
-      // ウィンドウ幅を取得してactiveColumnsを再計算
-      try {
-        const newActiveColumns = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold);
-        activeColumns = newActiveColumns;
-      } catch {
-        // 取得失敗時は前の値を維持
-      }
 
       debugLog(`[focus] activeColumns=${activeColumns}, totalColumns=${totalColumns}`);
 
@@ -247,6 +250,7 @@ export async function activate(
 
   context.subscriptions.push(
     vscode.commands.registerCommand("editorSpotlighter.alignLayout", async () => {
+      await refreshWindowWidth();
       onFocusChange();
       vscode.window.showInformationMessage(
         "Editor Spotlighter: レイアウトを整形しました"
