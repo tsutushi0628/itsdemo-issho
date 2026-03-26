@@ -12,7 +12,6 @@ import { RemoteWebviewProvider } from "./remoteWebviewProvider";
 
 let enabled = true;
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
-let widthDetectTimer: ReturnType<typeof setTimeout> | undefined;
 let remoteServer: RemoteViewServer | null = null;
 let remoteStatusBarItem: vscode.StatusBarItem | null = null;
 let remoteToken: string | null = null;
@@ -100,47 +99,8 @@ export async function activate(
   }
   debugLog(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}`);
 
-  const refreshActiveColumns = () => {
-    if (widthDetectTimer !== undefined) {
-      clearTimeout(widthDetectTimer);
-    }
-
-    widthDetectTimer = setTimeout(async () => {
-      widthDetectTimer = undefined;
-
-      try {
-        const newActiveColumns = await recalculateActiveColumns(
-          totalColumns,
-          minColumnWidth,
-          fullWidthThreshold
-        );
-
-        debugLog(`[refresh] newActiveColumns=${newActiveColumns}, current=${activeColumns}`);
-
-        if (newActiveColumns !== activeColumns) {
-          debugLog(`[refresh] changing activeColumns: ${activeColumns} -> ${newActiveColumns}`);
-          activeColumns = newActiveColumns;
-          if (activeColumns >= totalColumns) {
-            await resetToEqual(totalColumns);
-          } else {
-            onFocusChange();
-          }
-        }
-      } catch (err) {
-        debugLog(`[refresh] error: ${(err as Error).message}`);
-      }
-    }, 500);
-  };
-
   const onFocusChange = () => {
-    debugLog(`[focus] activeColumns=${activeColumns}, totalColumns=${totalColumns}, enabled=${enabled}`);
-
     if (!enabled) {
-      return;
-    }
-
-    debugLog(`[focus] activeColumns >= totalColumns check: ${activeColumns} >= ${totalColumns} = ${activeColumns >= totalColumns}`);
-    if (activeColumns >= totalColumns) {
       return;
     }
 
@@ -148,8 +108,18 @@ export async function activate(
       clearTimeout(debounceTimer);
     }
 
-    debounceTimer = setTimeout(() => {
+    debounceTimer = setTimeout(async () => {
       debounceTimer = undefined;
+
+      // ウィンドウ幅を取得してactiveColumnsを再計算
+      try {
+        const newActiveColumns = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold);
+        activeColumns = newActiveColumns;
+      } catch {
+        // 取得失敗時は前の値を維持
+      }
+
+      debugLog(`[focus] activeColumns=${activeColumns}, totalColumns=${totalColumns}`);
 
       const tabGroups = vscode.window.tabGroups;
       const activeGroup = tabGroups.activeTabGroup;
@@ -167,8 +137,15 @@ export async function activate(
         return;
       }
 
+      // ウルトラワイド等で全カラムアクティブなら等間隔に
+      if (activeColumns >= totalColumns) {
+        await resetToEqual(totalColumns);
+        await updateViewport();
+        return;
+      }
+
+      // アコーディオン適用
       const actualGroupCount = allGroups.length;
-      debugLog(`[layout] focusedGroupIndex=${focusedGroupIndex}, actualGroupCount=${actualGroupCount}, activeColumns=${activeColumns}`);
       let effectiveTotalColumns: number;
       if (actualGroupCount !== totalColumns) {
         effectiveTotalColumns = actualGroupCount;
@@ -191,17 +168,15 @@ export async function activate(
       };
 
       const layout = calculateLayout(layoutConfig, focusedGroupIndex);
-      (async () => {
-        try {
-          await applyLayout(layout);
-          await updateViewport();
-        } catch (error) {
-          vscode.window.showWarningMessage(
-            `Editor Spotlighter: レイアウト適用に失敗しました。(${(error as Error).message})`
-          );
-          throw error;
-        }
-      })();
+      try {
+        await applyLayout(layout);
+        await updateViewport();
+      } catch (error) {
+        vscode.window.showWarningMessage(
+          `Editor Spotlighter: レイアウト適用に失敗しました。(${(error as Error).message})`
+        );
+        throw error;
+      }
     }, 200);
   };
 
@@ -230,14 +205,6 @@ export async function activate(
       // モバイル接続中は常にviewportを更新（アコーディオンなしの場合もカバー）
       if (mobileConnected && remoteServer) {
         updateViewport();
-      }
-    })
-  );
-
-  context.subscriptions.push(
-    vscode.window.onDidChangeWindowState((windowState) => {
-      if (windowState.focused) {
-        refreshActiveColumns();
       }
     })
   );
@@ -295,7 +262,7 @@ export async function activate(
 
   context.subscriptions.push(
     vscode.commands.registerCommand("editorSpotlighter.alignLayout", async () => {
-      await resetToEqual(totalColumns);
+      onFocusChange();
       vscode.window.showInformationMessage(
         "Editor Spotlighter: レイアウトを整形しました"
       );
@@ -483,7 +450,7 @@ export async function activate(
       fullWidthThreshold = updated.get<number>("fullWidthThreshold", 3000);
       openInNextColumn = updated.get<boolean>("openInNextColumn", true);
 
-      refreshActiveColumns();
+      onFocusChange();
 
       // タブ設定が変更されたらVSCode本体設定を連動書き換え
       if (
@@ -511,11 +478,6 @@ export async function deactivate(): Promise<void> {
   if (debounceTimer !== undefined) {
     clearTimeout(debounceTimer);
     debounceTimer = undefined;
-  }
-
-  if (widthDetectTimer !== undefined) {
-    clearTimeout(widthDetectTimer);
-    widthDetectTimer = undefined;
   }
 
   if (remoteServer) {
