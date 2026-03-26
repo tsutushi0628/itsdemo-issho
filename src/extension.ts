@@ -144,25 +144,10 @@ export async function activate(
         return;
       }
 
-      // アコーディオン適用
-      const actualGroupCount = allGroups.length;
-      let effectiveTotalColumns: number;
-      if (actualGroupCount !== totalColumns) {
-        effectiveTotalColumns = actualGroupCount;
-      } else {
-        effectiveTotalColumns = totalColumns;
-      }
-
-      let effectiveActiveColumns: number;
-      if (activeColumns > effectiveTotalColumns) {
-        effectiveActiveColumns = effectiveTotalColumns;
-      } else {
-        effectiveActiveColumns = activeColumns;
-      }
-
+      // アコーディオン適用（常にtotalColumnsを使う）
       const layoutConfig: LayoutConfig = {
-        totalColumns: effectiveTotalColumns,
-        activeColumns: effectiveActiveColumns,
+        totalColumns,
+        activeColumns,
         activeRatio,
         inactiveRatio,
       };
