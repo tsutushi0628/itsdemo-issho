@@ -240,7 +240,7 @@ for w in list {
           this.sendFrame();
         }
       );
-    }, 500);
+    }, 1500);
   }
 
   private stopCapture(): void {

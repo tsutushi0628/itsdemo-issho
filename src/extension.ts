@@ -170,9 +170,10 @@ export async function activate(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       onFocusChange();
 
-      // モバイル接続中は常にviewportを更新（アコーディオンなしの場合もカバー）
+      // モバイル接続中は常にviewportとタブ情報を更新
       if (mobileConnected && remoteServer) {
         updateViewport();
+        updateRemoteTabs();
       }
     })
   );
@@ -284,6 +285,7 @@ export async function activate(
   context.subscriptions.push(
     vscode.window.tabGroups.onDidChangeTabs(() => {
       tabTreeProvider.refresh();
+      updateRemoteTabs();
     })
   );
 
@@ -591,14 +593,8 @@ async function startRemoteViewServer(
     remoteWebviewProvider.setRunning(qrSvg, url);
   }
 
-  // タブ情報の初期送信とイベントリスナー登録
+  // タブ情報の初期送信のみ（リスナーはactivate内で1回だけ登録済み）
   updateRemoteTabs();
-  context.subscriptions.push(
-    vscode.window.tabGroups.onDidChangeTabs(() => updateRemoteTabs())
-  );
-  context.subscriptions.push(
-    vscode.window.onDidChangeActiveTextEditor(() => updateRemoteTabs())
-  );
 
   vscode.window.showInformationMessage(
     `Editor Spotlighter: Remote View started on port ${port}`
