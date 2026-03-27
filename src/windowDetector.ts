@@ -13,7 +13,7 @@ export function getWindowBounds(): Promise<WindowBounds> {
 import CoreGraphics
 let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
 for w in list {
-    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code",
+    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code" || owner == "Visual Studio Code",
        let bounds = w["kCGWindowBounds"] as? [String: Any],
        let width = bounds["Width"] as? Double,
        width >= 500,
@@ -56,7 +56,7 @@ export function detectWindowWidth(): Promise<number> {
 import CoreGraphics
 let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
 for w in list {
-    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code",
+    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code" || owner == "Visual Studio Code",
        let bounds = w["kCGWindowBounds"] as? [String: Any],
        let width = bounds["Width"] as? Double,
        width >= 500 {

@@ -176,7 +176,7 @@ export class RemoteViewServer {
 import CoreGraphics
 let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
 for w in list {
-    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code",
+    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code" || owner == "Visual Studio Code",
        let bounds = w["kCGWindowBounds"] as? [String: Any],
        let width = bounds["Width"] as? Double,
        width >= 500,
@@ -194,7 +194,7 @@ for w in list {
 import CoreGraphics
 let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
 for w in list {
-    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code",
+    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code" || owner == "Visual Studio Code",
        let bounds = w["kCGWindowBounds"] as? [String: Any],
        let width = bounds["Width"] as? Double,
        width >= 500,
