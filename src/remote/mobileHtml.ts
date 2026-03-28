@@ -36,7 +36,6 @@ export function getMobileHtml(wsUrl: string): string {
     width: 100%;
     height: auto;
     display: block;
-    transition: width 0.2s ease, margin-left 0.2s ease;
   }
 
   #tabBar {
@@ -221,6 +220,8 @@ export function getMobileHtml(wsUrl: string): string {
 
     ws.onopen = function() {
       reconnectBanner.classList.remove('visible');
+      var pixelWidth = Math.round(screen.width * (window.devicePixelRatio || 1));
+      ws.send(JSON.stringify({ type: 'screenInfo', width: pixelWidth }));
     };
 
     ws.onclose = function() {
@@ -240,9 +241,9 @@ export function getMobileHtml(wsUrl: string): string {
       } else if (msg.type === 'tabs') {
         renderTabs(msg.data);
       } else if (msg.type === 'viewport') {
-        var scale = 1 / msg.width;
-        frame.style.width = (scale * 100) + '%';
-        frame.style.marginLeft = (-msg.x * scale * 100) + '%';
+        // Server sends cropped image, no CSS transform needed
+        frame.style.width = '100%';
+        frame.style.marginLeft = '0';
       }
     };
   }

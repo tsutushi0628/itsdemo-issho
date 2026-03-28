@@ -19,8 +19,9 @@ export class RemoteViewServer {
   private httpServer: http.Server | null = null;
   private wss: WebSocketServer | null = null;
   private token: string;
-  private captureInterval: NodeJS.Timeout | null = null;
   private windowId: string | null = null;
+  private capturing = false;
+  private screenWidth = 780;
   private messageCallback: ((msg: ClientMessage) => void) | null = null;
   private currentTabs: TabInfo[] = [];
   private viewport: {
@@ -66,6 +67,7 @@ export class RemoteViewServer {
   ): void {
     this.viewport = { x, y, width, height };
     this.broadcastViewport();
+    this.captureOnce();
   }
 
   clearViewport(): void {
@@ -100,9 +102,10 @@ export class RemoteViewServer {
   }
 
   private sendFrame(): void {
+    const filePath = this.viewport ? "/tmp/es-frame-cropped.jpg" : "/tmp/es-frame.jpg";
     let data: Buffer;
     try {
-      data = fs.readFileSync("/tmp/es-frame.jpg");
+      data = fs.readFileSync(filePath);
     } catch {
       return;
     }
@@ -215,39 +218,65 @@ for w in list {
     };
   }
 
-  private startCapture(): void {
-    if (this.captureInterval) {
+  async captureOnce(): Promise<void> {
+    if (!this.wss || this.wss.clients.size === 0) {
       return;
     }
-
-    try {
-      this.windowId = this.getVSCodeWindowId();
-    } catch {
+    if (this.capturing) {
       return;
     }
-
-    this.captureInterval = setInterval(() => {
-      if (!this.wss || this.wss.clients.size === 0) {
+    if (!this.windowId) {
+      try {
+        this.windowId = this.getVSCodeWindowId();
+      } catch {
         return;
       }
+    }
 
-      exec(
-        `screencapture -x -o -l ${this.windowId} -t jpg /tmp/es-frame.jpg`,
-        (err) => {
-          if (err) {
-            return;
+    this.capturing = true;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        exec(
+          `screencapture -x -o -l ${this.windowId} -t jpg /tmp/es-frame.jpg`,
+          (err) => {
+            if (err) {
+              reject(err);
+              return;
+            }
+            resolve();
           }
-          this.sendFrame();
+        );
+      });
+
+      if (this.viewport) {
+        const sipsInfo = execSync("sips -g pixelHeight -g pixelWidth /tmp/es-frame.jpg").toString();
+        const widthMatch = sipsInfo.match(/pixelWidth:\s+(\d+)/);
+        const heightMatch = sipsInfo.match(/pixelHeight:\s+(\d+)/);
+        if (widthMatch && heightMatch) {
+          const imgW = parseInt(widthMatch[1], 10);
+          const imgH = parseInt(heightMatch[1], 10);
+          const cropW = Math.round(imgW * this.viewport.width);
+          const cropH = Math.round(imgH * this.viewport.height);
+          const offsetX = Math.round(imgW * this.viewport.x);
+          const offsetY = Math.round(imgH * this.viewport.y);
+          execSync(
+            `sips -c ${cropH} ${cropW} --cropOffset ${offsetY} ${offsetX} /tmp/es-frame.jpg -s format jpeg --out /tmp/es-frame-cropped.jpg`
+          );
+          execSync(
+            `sips --resampleWidth ${this.screenWidth} /tmp/es-frame-cropped.jpg`
+          );
         }
-      );
-    }, 1500);
+      }
+
+      this.sendFrame();
+    } catch {
+      // capture or crop failed — skip this frame
+    } finally {
+      this.capturing = false;
+    }
   }
 
   private stopCapture(): void {
-    if (this.captureInterval) {
-      clearInterval(this.captureInterval);
-      this.captureInterval = null;
-    }
     this.windowId = null;
   }
 
@@ -328,7 +357,7 @@ mouseUp?.post(tap: .cghidEventTap)
 
     // 最初のクライアント接続でキャプチャ開始＋コールバック呼び出し
     const wasFirstClient = this.wss!.clients.size === 1;
-    this.startCapture();
+    this.captureOnce();
 
     if (wasFirstClient && this.connectCallback) {
       this.connectCallback();
@@ -370,6 +399,8 @@ mouseUp?.post(tap: .cghidEventTap)
         if (this.disconnectCallback) {
           this.disconnectCallback();
         }
+      } else if (message.type === "screenInfo") {
+        this.screenWidth = message.width || 780;
       } else if (message.type === "type" || message.type === "switchTab") {
         if (this.messageCallback) {
           this.messageCallback(message);
