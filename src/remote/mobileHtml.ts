@@ -38,45 +38,34 @@ export function getMobileHtml(wsUrl: string): string {
     display: block;
   }
 
-  #tabBar {
+  #columnBar {
     display: flex;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
     background: #f3f4f6;
     border-top: 1px solid #e5e7eb;
-    min-height: 44px;
+    min-height: 48px;
     flex-shrink: 0;
-    scrollbar-width: none;
   }
 
-  #tabBar::-webkit-scrollbar {
-    display: none;
-  }
-
-  .tab-item {
-    display: flex;
-    align-items: center;
-    padding: 0 16px;
-    white-space: nowrap;
-    font-size: 13px;
-    color: #6b7280;
-    border-bottom: 2px solid transparent;
+  .col-btn {
+    flex: 1;
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent;
+    font-size: 16px;
+    font-weight: 600;
+    color: #9ca3af;
     cursor: pointer;
-    flex-shrink: 0;
-    min-height: 44px;
-    transition: color 0.15s, border-color 0.15s;
     -webkit-tap-highlight-color: transparent;
-    user-select: none;
+    transition: color 0.15s, border-color 0.15s;
   }
 
-  .tab-item:active {
+  .col-btn:active {
     background: #e5e7eb;
   }
 
-  .tab-item.active {
+  .col-btn.active {
     color: #7c3aed;
     border-bottom-color: #7c3aed;
-    font-weight: 600;
   }
 
   #inputBar {
@@ -177,9 +166,6 @@ export function getMobileHtml(wsUrl: string): string {
     background: rgba(0,0,0,0.7);
   }
 
-  .no-tabs {
-    display: none;
-  }
 </style>
 </head>
 <body>
@@ -192,7 +178,12 @@ export function getMobileHtml(wsUrl: string): string {
     <img id="frame" />
   </div>
 
-  <div id="tabBar" class="no-tabs"></div>
+  <div id="columnBar">
+    <button class="col-btn active" data-col="0">1</button>
+    <button class="col-btn" data-col="1">2</button>
+    <button class="col-btn" data-col="2">3</button>
+    <button class="col-btn" data-col="3">4</button>
+  </div>
 
   <div id="inputBar">
     <div class="input-row">
@@ -209,11 +200,30 @@ export function getMobileHtml(wsUrl: string): string {
   var sendBtn = document.getElementById('sendBtn');
   var closeBtn = document.getElementById('closeBtn');
   var reconnectBanner = document.getElementById('reconnectBanner');
-  var tabBar = document.getElementById('tabBar');
   var ws = null;
   var reconnectTimer = null;
 
   // ダブルタップは将来のスクロール調整用に予約
+
+  var columnBar = document.getElementById('columnBar');
+  var colBtns = columnBar.querySelectorAll('.col-btn');
+  var activeColumn = 0;
+
+  function selectColumn(col) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    activeColumn = col;
+    // ボタンのactive状態を更新
+    for (var i = 0; i < colBtns.length; i++) {
+      colBtns[i].className = colBtns[i].dataset.col == col ? 'col-btn active' : 'col-btn';
+    }
+    ws.send(JSON.stringify({ type: 'selectColumn', column: col }));
+  }
+
+  for (var i = 0; i < colBtns.length; i++) {
+    colBtns[i].addEventListener('click', function() {
+      selectColumn(parseInt(this.dataset.col, 10));
+    });
+  }
 
   function connect() {
     ws = new WebSocket('${wsUrl}');
@@ -238,53 +248,16 @@ export function getMobileHtml(wsUrl: string): string {
       var msg = JSON.parse(e.data);
       if (msg.type === 'frame') {
         frame.src = msg.data;
-      } else if (msg.type === 'tabs') {
-        renderTabs(msg.data);
-      } else if (msg.type === 'viewport') {
-        // Server sends cropped image, no CSS transform needed
-        frame.style.width = '100%';
-        frame.style.marginLeft = '0';
+      } else if (msg.type === 'columns') {
+        // サーバーからカラム数とアクティブカラムを受信
+        // ボタン数をカラム数に合わせて表示/非表示
+        for (var i = 0; i < colBtns.length; i++) {
+          colBtns[i].style.display = i < msg.count ? '' : 'none';
+          colBtns[i].className = i === msg.active ? 'col-btn active' : 'col-btn';
+        }
+        activeColumn = msg.active;
       }
     };
-  }
-
-  function renderTabs(tabs) {
-    if (!tabs || tabs.length === 0) {
-      tabBar.className = 'no-tabs';
-      tabBar.textContent = '';
-      return;
-    }
-
-    tabBar.className = '';
-    tabBar.id = 'tabBar';
-    tabBar.textContent = '';
-
-    for (var i = 0; i < tabs.length; i++) {
-      var tab = tabs[i];
-      var el = document.createElement('div');
-      el.className = 'tab-item';
-      if (tab.isActive) {
-        el.className = 'tab-item active';
-      }
-      el.textContent = tab.label;
-      el.dataset.groupIndex = tab.groupIndex;
-      el.dataset.tabIndex = tab.tabIndex;
-      el.addEventListener('click', function() {
-        if (!ws || ws.readyState !== WebSocket.OPEN) { return; }
-        ws.send(JSON.stringify({
-          type: 'switchTab',
-          groupIndex: parseInt(this.dataset.groupIndex, 10),
-          tabIndex: parseInt(this.dataset.tabIndex, 10)
-        }));
-      });
-      tabBar.appendChild(el);
-    }
-
-    // アクティブタブを表示領域にスクロール
-    var activeEl = tabBar.querySelector('.tab-item.active');
-    if (activeEl) {
-      activeEl.scrollIntoView({ inline: 'center', block: 'nearest' });
-    }
   }
 
   frame.addEventListener('click', function(e) {

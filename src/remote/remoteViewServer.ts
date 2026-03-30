@@ -1,11 +1,12 @@
 import http from "http";
-import fs from "fs";
 import { URL } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import { exec, execSync } from "child_process";
+import sharp from "sharp";
 import { validateToken } from "./tokenAuth";
 import { getMobileHtml } from "./mobileHtml";
 import { ClientMessage, ServerMessage, TabInfo } from "./protocol";
+import { detectPanelBoundaries, PanelBoundaries } from "./panelDetector";
 import net from "net";
 
 interface WindowBounds {
@@ -24,12 +25,9 @@ export class RemoteViewServer {
   private screenWidth = 780;
   private messageCallback: ((msg: ClientMessage) => void) | null = null;
   private currentTabs: TabInfo[] = [];
-  private viewport: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  } | null = null;
+  private selectedColumn = 0;
+  private columnCount = 4;
+  private panelCache: PanelBoundaries | null = null;
   private connectCallback: (() => void) | null = null;
   private disconnectCallback: (() => void) | null = null;
 
@@ -59,37 +57,17 @@ export class RemoteViewServer {
     this.messageCallback = callback;
   }
 
-  setViewport(
-    x: number,
-    y: number,
-    width: number,
-    height: number
-  ): void {
-    this.viewport = { x, y, width, height };
-    this.broadcastViewport();
-    this.captureOnce();
+  setColumnCount(count: number): void {
+    this.columnCount = count;
+    this.broadcastColumns();
   }
 
-  clearViewport(): void {
-    this.viewport = null;
-  }
-
-  private broadcastViewport(): void {
-    if (!this.wss || this.wss.clients.size === 0 || !this.viewport) {
-      return;
-    }
-    const msg: ServerMessage = {
-      type: "viewport",
-      x: this.viewport.x,
-      y: this.viewport.y,
-      width: this.viewport.width,
-      height: this.viewport.height,
-    };
+  private broadcastColumns(): void {
+    if (!this.wss || this.wss.clients.size === 0) return;
+    const msg: ServerMessage = { type: "columns", count: this.columnCount, active: this.selectedColumn };
     const payload = JSON.stringify(msg);
     for (const client of this.wss.clients) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(payload);
-      }
+      if (client.readyState === WebSocket.OPEN) client.send(payload);
     }
   }
 
@@ -99,27 +77,6 @@ export class RemoteViewServer {
 
   onAllDisconnect(callback: () => void): void {
     this.disconnectCallback = callback;
-  }
-
-  private sendFrame(): void {
-    const filePath = this.viewport ? "/tmp/es-frame-cropped.jpg" : "/tmp/es-frame.jpg";
-    let data: Buffer;
-    try {
-      data = fs.readFileSync(filePath);
-    } catch {
-      return;
-    }
-    const base64 = data.toString("base64");
-    const msg: ServerMessage = {
-      type: "frame",
-      data: "data:image/jpeg;base64," + base64,
-    };
-    const payload = JSON.stringify(msg);
-    for (const client of this.wss!.clients) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(payload);
-      }
-    }
   }
 
   async start(port: number): Promise<void> {
@@ -219,58 +176,41 @@ for w in list {
   }
 
   async captureOnce(): Promise<void> {
-    if (!this.wss || this.wss.clients.size === 0) {
-      return;
-    }
-    if (this.capturing) {
-      return;
-    }
+    if (!this.wss || this.wss.clients.size === 0) return;
+    if (this.capturing) return;
     if (!this.windowId) {
-      try {
-        this.windowId = this.getVSCodeWindowId();
-      } catch {
-        return;
-      }
+      try { this.windowId = this.getVSCodeWindowId(); } catch { return; }
     }
 
     this.capturing = true;
     try {
+      // 1. screencapture
       await new Promise<void>((resolve, reject) => {
-        exec(
-          `screencapture -x -o -l ${this.windowId} -t jpg /tmp/es-frame.jpg`,
-          (err) => {
-            if (err) {
-              reject(err);
-              return;
-            }
-            resolve();
-          }
-        );
+        exec(`screencapture -x -o -l ${this.windowId} -t jpg /tmp/es-frame.jpg`, (err) => err ? reject(err) : resolve());
       });
 
-      if (this.viewport) {
-        const sipsInfo = execSync("sips -g pixelHeight -g pixelWidth /tmp/es-frame.jpg").toString();
-        const widthMatch = sipsInfo.match(/pixelWidth:\s+(\d+)/);
-        const heightMatch = sipsInfo.match(/pixelHeight:\s+(\d+)/);
-        if (widthMatch && heightMatch) {
-          const imgW = parseInt(widthMatch[1], 10);
-          const imgH = parseInt(heightMatch[1], 10);
-          const cropW = Math.round(imgW * this.viewport.width);
-          const cropH = Math.round(imgH * this.viewport.height);
-          const offsetX = Math.round(imgW * this.viewport.x);
-          const offsetY = Math.round(imgH * this.viewport.y);
-          execSync(
-            `sips -c ${cropH} ${cropW} --cropOffset ${offsetY} ${offsetX} /tmp/es-frame.jpg -s format jpeg --out /tmp/es-frame-cropped.jpg`
-          );
-          execSync(
-            `sips --resampleWidth ${this.screenWidth} /tmp/es-frame-cropped.jpg`
-          );
+      // 2. パネル境界検出
+      this.panelCache = await detectPanelBoundaries("/tmp/es-frame.jpg");
+
+      // 3. 選択カラムのクロップ＋リサイズ
+      const col = this.panelCache.columns[this.selectedColumn];
+      if (col) {
+        const buf = await sharp("/tmp/es-frame.jpg")
+          .extract({ left: col.left, top: 0, width: col.width, height: this.panelCache.imageHeight })
+          .resize(this.screenWidth)
+          .jpeg({ quality: 80 })
+          .toBuffer();
+
+        // 4. Base64送信
+        const base64 = buf.toString("base64");
+        const msg: ServerMessage = { type: "frame", data: "data:image/jpeg;base64," + base64 };
+        const payload = JSON.stringify(msg);
+        for (const client of this.wss!.clients) {
+          if (client.readyState === WebSocket.OPEN) client.send(payload);
         }
       }
-
-      this.sendFrame();
     } catch {
-      // capture or crop failed — skip this frame
+      // skip
     } finally {
       this.capturing = false;
     }
@@ -282,14 +222,20 @@ for w in list {
 
   private handleClick(x: number, y: number): void {
     let bounds: WindowBounds;
-    try {
-      bounds = this.getWindowBounds();
-    } catch {
-      return;
-    }
+    try { bounds = this.getWindowBounds(); } catch { return; }
 
-    const absX = Math.round(bounds.x + x * bounds.width);
-    const absY = Math.round(bounds.y + y * bounds.height);
+    // x,y はクロップ済み画像上の相対座標 (0-1)
+    // panelCacheから選択中カラムの位置を取得
+    const col = this.panelCache?.columns[this.selectedColumn];
+    if (!col) return;
+
+    // クロップ画像上の比率 → ウィンドウ全体のピクセル座標
+    const imgX = col.left + x * col.width;
+    const imgY = y * (this.panelCache?.imageHeight ?? bounds.height);
+
+    // 画像ピクセル → ウィンドウ座標の比率変換
+    const absX = Math.round(bounds.x + (imgX / (this.panelCache?.imageWidth ?? bounds.width)) * bounds.width);
+    const absY = Math.round(bounds.y + (imgY / (this.panelCache?.imageHeight ?? bounds.height)) * bounds.height);
 
     exec(`swift -e '
 import CoreGraphics
@@ -363,21 +309,14 @@ mouseUp?.post(tap: .cghidEventTap)
       this.connectCallback();
     }
 
-    // 接続時にタブ情報とviewportを即座に送信
+    // 接続時にタブ情報とカラム情報を即座に送信
     if (this.currentTabs.length > 0) {
       const tabMsg: ServerMessage = { type: "tabs", data: this.currentTabs };
       ws.send(JSON.stringify(tabMsg));
     }
-    if (this.viewport) {
-      const vpMsg: ServerMessage = {
-        type: "viewport",
-        x: this.viewport.x,
-        y: this.viewport.y,
-        width: this.viewport.width,
-        height: this.viewport.height,
-      };
-      ws.send(JSON.stringify(vpMsg));
-    }
+    // columns情報を送信
+    const colMsg: ServerMessage = { type: "columns", count: this.columnCount, active: this.selectedColumn };
+    ws.send(JSON.stringify(colMsg));
 
     ws.on("message", (rawData) => {
       const data = rawData.toString();
@@ -390,6 +329,10 @@ mouseUp?.post(tap: .cghidEventTap)
 
       if (message.type === "click") {
         this.handleClick(message.x, message.y);
+      } else if (message.type === "selectColumn") {
+        this.selectedColumn = message.column;
+        this.broadcastColumns();
+        this.captureOnce();
       } else if (message.type === "disconnect") {
         // スマホから明示的切断 → 全クライアント閉じてキャプチャ停止+復元
         for (const client of this.wss!.clients) {

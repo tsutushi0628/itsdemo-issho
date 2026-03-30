@@ -27,34 +27,6 @@ async function recalculateActiveColumns(
   return computeActiveColumns(windowWidth, minColumnWidth, totalColumns, fullWidthThreshold);
 }
 
-async function updateViewport(): Promise<void> {
-  if (!remoteServer || !mobileConnected) {
-    return;
-  }
-
-  const tabGroups = vscode.window.tabGroups;
-  const allGroups = tabGroups.all;
-  const activeGroup = tabGroups.activeTabGroup;
-
-  let activeIndex = -1;
-  for (let i = 0; i < allGroups.length; i++) {
-    if (allGroups[i] === activeGroup) {
-      activeIndex = i;
-      break;
-    }
-  }
-  if (activeIndex < 0) {
-    return;
-  }
-
-  // グループ均等分割で表示領域の比率を計算
-  const groupCount = allGroups.length;
-  const viewportWidth = 1 / groupCount;
-  const viewportX = activeIndex / groupCount;
-
-  remoteServer.setViewport(viewportX, 0, viewportWidth, 1.0);
-}
-
 export async function activate(
   context: vscode.ExtensionContext
 ): Promise<void> {
@@ -141,7 +113,6 @@ export async function activate(
       // ウルトラワイド等で全カラムアクティブなら等間隔に
       if (activeColumns >= totalColumns) {
         await resetToEqual(totalColumns);
-        await updateViewport();
         return;
       }
 
@@ -156,7 +127,6 @@ export async function activate(
       const layout = calculateLayout(layoutConfig, focusedGroupIndex);
       try {
         await applyLayout(layout);
-        await updateViewport();
       } catch (error) {
         vscode.window.showWarningMessage(
           `Editor Spotlighter: レイアウト適用に失敗しました。(${(error as Error).message})`
@@ -170,9 +140,8 @@ export async function activate(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       onFocusChange();
 
-      // モバイル接続中は常にviewportとタブ情報を更新
+      // モバイル接続中はタブ情報を更新（viewportは不要）
       if (mobileConnected && remoteServer) {
-        updateViewport();
         updateRemoteTabs();
       }
     })
@@ -250,17 +219,16 @@ export async function activate(
   const handleMobileConnect = async () => {
     debugLog("[mobile] connected");
     mobileConnected = true;
-    // 接続直後にviewportを設定
-    await updateViewport();
-    debugLog("[mobile] viewport set");
+    if (remoteServer) {
+      remoteServer.setColumnCount(totalColumns);
+      remoteServer.captureOnce();
+    }
+    debugLog("[mobile] column count set");
   };
 
   const handleMobileDisconnect = async () => {
     debugLog("[mobile] disconnected");
     mobileConnected = false;
-    if (remoteServer) {
-      remoteServer.clearViewport();
-    }
   };
 
   // RemoteWebviewProvider の登録（サイドバー内WebView）
@@ -422,6 +390,10 @@ export async function activate(
       openInNextColumn = updated.get<boolean>("openInNextColumn", true);
 
       onFocusChange();
+
+      if (remoteServer && mobileConnected) {
+        remoteServer.setColumnCount(totalColumns);
+      }
 
       // タブ設定が変更されたらVSCode本体設定を連動書き換え
       if (
