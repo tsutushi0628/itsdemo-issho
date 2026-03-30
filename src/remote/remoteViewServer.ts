@@ -3,8 +3,8 @@ import { URL } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import { exec, execSync } from "child_process";
 import sharp from "sharp";
-import { validateToken } from "./tokenAuth";
-import { getMobileHtml } from "./mobileHtml";
+import { validatePassword, generateSessionToken } from "./tokenAuth";
+import { getMobileHtml, getLoginHtml } from "./mobileHtml";
 import { ClientMessage, ServerMessage, TabInfo } from "./protocol";
 import { detectPanelBoundaries, PanelBoundaries } from "./panelDetector";
 import net from "net";
@@ -19,7 +19,8 @@ interface WindowBounds {
 export class RemoteViewServer {
   private httpServer: http.Server | null = null;
   private wss: WebSocketServer | null = null;
-  private token: string;
+  private password: string;
+  private sessions: Set<string> = new Set();
   private windowId: string | null = null;
   private capturing = false;
   private screenWidth = 780;
@@ -31,8 +32,8 @@ export class RemoteViewServer {
   private connectCallback: (() => void) | null = null;
   private disconnectCallback: (() => void) | null = null;
 
-  constructor(token: string, _projectPath: string) {
-    this.token = token;
+  constructor(password: string, _projectPath: string) {
+    this.password = password;
   }
 
   setTabInfo(tabs: TabInfo[]): void {
@@ -247,30 +248,68 @@ mouseUp?.post(tap: .cghidEventTap)
 '`);
   }
 
+  private getSessionFromCookie(req: http.IncomingMessage): string | null {
+    const cookie = req.headers.cookie;
+    if (!cookie) return null;
+    const match = cookie.match(/session=([a-f0-9]+)/);
+    return match ? match[1] : null;
+  }
+
   private handleHttpRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse
   ): void {
     if (!this.isAllowedAccess(req)) {
       res.writeHead(403, { "Content-Type": "text/plain" });
-      res.end("Forbidden: Only LAN access is allowed");
+      res.end("Forbidden");
       return;
     }
 
     const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host}`);
-    const tokenParam = requestUrl.searchParams.get("token");
 
-    if (!tokenParam || !validateToken(tokenParam, this.token)) {
-      res.writeHead(401, { "Content-Type": "text/plain" });
-      res.end("Unauthorized: Invalid token");
+    // POST /login — パスワード認証
+    if (req.method === "POST" && requestUrl.pathname === "/login") {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const params = new URLSearchParams(body);
+        const pw = params.get("password") || "";
+        if (validatePassword(pw, this.password)) {
+          const session = generateSessionToken();
+          this.sessions.add(session);
+          res.writeHead(302, {
+            "Set-Cookie": `session=${session}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${30 * 24 * 60 * 60}`,
+            "Location": "/"
+          });
+          res.end();
+        } else {
+          res.writeHead(302, { "Location": "/login?error=1" });
+          res.end();
+        }
+      });
       return;
     }
 
+    // GET /login — ログイン画面
+    if (requestUrl.pathname === "/login") {
+      const hasError = requestUrl.searchParams.has("error");
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(getLoginHtml(hasError));
+      return;
+    }
+
+    // GET / — セッション検証
     if (requestUrl.pathname === "/" || requestUrl.pathname === "") {
+      const sessionToken = this.getSessionFromCookie(req);
+      if (!sessionToken || !this.sessions.has(sessionToken)) {
+        res.writeHead(302, { "Location": "/login" });
+        res.end();
+        return;
+      }
       const isHttps = req.headers["x-forwarded-proto"] === "https" || req.headers["cf-visitor"]?.includes('"scheme":"https"');
       const wsProtocol = isHttps ? "wss" : "ws";
       const host = req.headers.host ?? "localhost";
-      const wsUrl = `${wsProtocol}://${host}/ws?token=${tokenParam}`;
+      const wsUrl = `${wsProtocol}://${host}/ws`;
       const html = getMobileHtml(wsUrl);
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(html);
@@ -286,18 +325,13 @@ mouseUp?.post(tap: .cghidEventTap)
     req: http.IncomingMessage
   ): void {
     if (!this.isAllowedAccess(req)) {
-      ws.close(4003, "Forbidden: Only LAN access is allowed");
+      ws.close(4003, "Forbidden");
       return;
     }
 
-    const requestUrl = new URL(
-      req.url ?? "/",
-      `http://${req.headers.host}`
-    );
-    const tokenParam = requestUrl.searchParams.get("token");
-
-    if (!tokenParam || !validateToken(tokenParam, this.token)) {
-      ws.close(4001, "Unauthorized: Invalid token");
+    const sessionToken = this.getSessionFromCookie(req);
+    if (!sessionToken || !this.sessions.has(sessionToken)) {
+      ws.close(4001, "Unauthorized");
       return;
     }
 

@@ -7,14 +7,12 @@ import { computeActiveColumns } from "./columnCalculator";
 import { calculateLayout, applyLayout, LayoutConfig } from "./layoutEngine";
 import { TabTreeProvider } from "./tabTreeProvider";
 import { RemoteViewServer } from "./remote/remoteViewServer";
-import { generateToken } from "./remote/tokenAuth";
 import { RemoteWebviewProvider } from "./remoteWebviewProvider";
 
 let enabled = true;
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 let remoteServer: RemoteViewServer | null = null;
 let remoteStatusBarItem: vscode.StatusBarItem | null = null;
-let remoteToken: string | null = null;
 let remoteWebviewProvider: RemoteWebviewProvider | null = null;
 let mobileConnected = false;
 
@@ -467,6 +465,7 @@ async function startRemoteViewServer(
 ): Promise<void> {
   const config = vscode.workspace.getConfiguration("editorSpotlighter");
   const port = config.get<number>("remoteView.port", 19280);
+  const password = config.get<string>("remoteView.password", "issho");
 
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders || workspaceFolders.length === 0) {
@@ -477,9 +476,7 @@ async function startRemoteViewServer(
   }
   const projectPath = workspaceFolders[0].uri.fsPath;
 
-  remoteToken = generateToken();
-  const token = remoteToken;
-  remoteServer = new RemoteViewServer(token, projectPath);
+  remoteServer = new RemoteViewServer(password, projectPath);
 
   remoteServer.onFirstConnect(() => {
     mobileConnected = true;
@@ -544,7 +541,7 @@ async function startRemoteViewServer(
     100
   );
   remoteStatusBarItem.text = `$(remote) Remote: ${port}`;
-  remoteStatusBarItem.tooltip = `http://localhost:${port}/?token=${token}`;
+  remoteStatusBarItem.tooltip = `Remote View running on port ${port}`;
   remoteStatusBarItem.command = "editorSpotlighter.stopRemoteView";
   remoteStatusBarItem.show();
   context.subscriptions.push(remoteStatusBarItem);
@@ -554,10 +551,10 @@ async function startRemoteViewServer(
   const tunnelDomain = config.get<string>("remoteView.tunnelDomain", "");
   let url: string;
   if (tunnelDomain) {
-    url = `https://${tunnelDomain}/?token=${token}`;
+    url = `https://${tunnelDomain}/`;
   } else {
     const localIp = getLocalIpAddress();
-    url = `http://${localIp}:${port}/?token=${token}`;
+    url = `http://${localIp}:${port}/`;
   }
   const qrSvg = await QRCode.toString(url, { type: "svg" });
 
@@ -606,7 +603,6 @@ async function stopRemoteViewServer(): Promise<void> {
     await remoteServer.stop();
     remoteServer = null;
   }
-  remoteToken = null;
   if (remoteStatusBarItem) {
     remoteStatusBarItem.dispose();
     remoteStatusBarItem = null;

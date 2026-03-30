@@ -4,7 +4,7 @@ export function getMobileHtml(wsUrl: string): string {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes">
-<title>Editor Spotlighter Remote</title>
+<title>itsudemo-issho</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -203,8 +203,6 @@ export function getMobileHtml(wsUrl: string): string {
   var ws = null;
   var reconnectTimer = null;
 
-  // ダブルタップは将来のスクロール調整用に予約
-
   var columnBar = document.getElementById('columnBar');
   var colBtns = columnBar.querySelectorAll('.col-btn');
   var activeColumn = 0;
@@ -212,7 +210,6 @@ export function getMobileHtml(wsUrl: string): string {
   function selectColumn(col) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     activeColumn = col;
-    // ボタンのactive状態を更新
     for (var i = 0; i < colBtns.length; i++) {
       colBtns[i].className = colBtns[i].dataset.col == col ? 'col-btn active' : 'col-btn';
     }
@@ -249,8 +246,6 @@ export function getMobileHtml(wsUrl: string): string {
       if (msg.type === 'frame') {
         frame.src = msg.data;
       } else if (msg.type === 'columns') {
-        // サーバーからカラム数とアクティブカラムを受信
-        // ボタン数をカラム数に合わせて表示/非表示
         for (var i = 0; i < colBtns.length; i++) {
           colBtns[i].style.display = i < msg.count ? '' : 'none';
           colBtns[i].className = i === msg.active ? 'col-btn active' : 'col-btn';
@@ -283,11 +278,10 @@ export function getMobileHtml(wsUrl: string): string {
   });
 
   closeBtn.addEventListener('click', function() {
-    // 自動再接続を停止
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
     if (ws) {
-      ws.onclose = null;  // 再接続ハンドラを無効化
+      ws.onclose = null;
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'disconnect' }));
       }
@@ -300,6 +294,84 @@ export function getMobileHtml(wsUrl: string): string {
   connect();
 })();
 </script>
+</body>
+</html>`;
+}
+
+export function getLoginHtml(hasError: boolean): string {
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>itsudemo-issho</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f8f9fa;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .login-card {
+    background: #fff;
+    border-radius: 16px;
+    padding: 32px 24px;
+    width: 90%;
+    max-width: 320px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    text-align: center;
+  }
+  .login-card h1 {
+    font-size: 20px;
+    color: #1a1a1a;
+    margin-bottom: 24px;
+  }
+  .login-card input[type="password"] {
+    width: 100%;
+    padding: 12px 16px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 16px;
+    outline: none;
+    margin-bottom: 16px;
+  }
+  .login-card input[type="password"]:focus {
+    border-color: #7c3aed;
+    box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.1);
+  }
+  .login-card button {
+    width: 100%;
+    padding: 12px;
+    background: #7c3aed;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .login-card button:active {
+    background: #6d28d9;
+  }
+  .error {
+    color: #dc2626;
+    font-size: 14px;
+    margin-bottom: 12px;
+  }
+</style>
+</head>
+<body>
+<div class="login-card">
+  <h1>itsudemo-issho</h1>
+  ${hasError ? '<p class="error">パスワードが違います</p>' : ''}
+  <form method="POST" action="/login">
+    <input type="password" name="password" placeholder="パスワード" autofocus />
+    <button type="submit">接続</button>
+  </form>
+</div>
 </body>
 </html>`;
 }

@@ -118,6 +118,11 @@
           "type": "number",
           "default": 19280,
           "description": "リモートビューのポート番号"
+        },
+        "editorSpotlighter.remoteView.password": {
+          "type": "string",
+          "default": "issho",
+          "description": "Password for remote view access"
         }
       }
     },
