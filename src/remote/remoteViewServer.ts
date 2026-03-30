@@ -197,7 +197,7 @@ for w in list {
       const col = this.panelCache.columns[this.selectedColumn];
       if (col) {
         const buf = await sharp("/tmp/es-frame.jpg")
-          .extract({ left: col.left, top: 0, width: col.width, height: this.panelCache.imageHeight })
+          .extract({ left: col.left, top: 0, width: col.width, height: this.panelCache.editorBottom })
           .resize(this.screenWidth)
           .jpeg({ quality: 80 })
           .toBuffer();

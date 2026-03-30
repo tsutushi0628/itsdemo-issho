@@ -494,20 +494,25 @@ async function startRemoteViewServer(
   remoteServer.onClientMessage(async (msg) => {
     if (msg.type === "type") {
       await vscode.env.clipboard.writeText(msg.text);
+
+      // まずClaude Codeのフォーカスを試みる
       try {
         await vscode.commands.executeCommand("claude-vscode.focus");
       } catch {
         // Claude Code extension may not be installed
       }
-      // osascriptで Cmd+V → Enter を送信
-      exec(`osascript -e 'delay 0.3' -e 'tell application "System Events" to keystroke "v" using command down' -e 'delay 0.2' -e 'tell application "System Events" to keystroke return'`, (err) => {
-        if (err) {
-          console.error(`[Editor Spotlighter][type] osascript error: ${err.message}`);
-          vscode.window.showWarningMessage(
-            "Editor Spotlighter: テキスト送信にはアクセシビリティ権限が必要です。システム設定 → プライバシーとセキュリティ → アクセシビリティ で Visual Studio Code を許可してください。"
-          );
-        }
-      });
+
+      // フォーカス完了まで少し待ってからキーストローク送信
+      setTimeout(() => {
+        exec(`osascript -e 'tell application "System Events" to keystroke "v" using command down' -e 'delay 0.3' -e 'tell application "System Events" to keystroke return'`, (err) => {
+          if (err) {
+            console.error(`[Editor Spotlighter][type] osascript error: ${err.message}`);
+            vscode.window.showWarningMessage(
+              "Editor Spotlighter: テキスト送信にはアクセシビリティ権限が必要です。システム設定 → プライバシーとセキュリティ → アクセシビリティ で Visual Studio Code を許可してください。"
+            );
+          }
+        });
+      }, 500);
     } else if (msg.type === "switchTab") {
       const groups = vscode.window.tabGroups.all;
       if (msg.groupIndex < groups.length) {

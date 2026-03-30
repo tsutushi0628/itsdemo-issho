@@ -7,6 +7,8 @@ export interface PanelBoundaries {
   imageWidth: number;
   /** 画像全体の高さ */
   imageHeight: number;
+  /** エディタ領域の下端y座標（ピクセル）。ターミナルパネルとの境界 */
+  editorBottom: number;
 }
 
 /**
@@ -27,6 +29,7 @@ function luminance(r: number, g: number, b: number): number {
  * 5. 近接（5px以内）のセパレータはグルーピング
  * 6. 最初のセパレータ＝サイドバー右端。それ以降がカラム境界
  * 7. サイドバー以降のセパレータでカラムを区切り、columnsを生成
+ * 8. 垂直方向: 画像下半分で水平セパレータを検出し、エディタ下端を特定
  *
  * @param imagePath キャプチャ画像のパス
  * @returns パネル境界情報
@@ -106,6 +109,7 @@ export async function detectPanelBoundaries(
       columns: [{ left: 0, width: imageWidth }],
       imageWidth,
       imageHeight,
+      editorBottom: imageHeight,
     };
   }
 
@@ -135,6 +139,7 @@ export async function detectPanelBoundaries(
       columns: [{ left: 0, width: imageWidth }],
       imageWidth,
       imageHeight,
+      editorBottom: imageHeight,
     };
   }
 
@@ -159,9 +164,65 @@ export async function detectPanelBoundaries(
     width: imageWidth - currentLeft,
   });
 
+  // --- 垂直方向: 水平セパレータ検出（エディタ下端の特定） ---
+  // 画像の中央30%〜70%のx範囲で10px間隔にサンプリング
+  const hSampleXStart = Math.floor(imageWidth * 0.3);
+  const hSampleXEnd = Math.floor(imageWidth * 0.7);
+  const hSampleXs: number[] = [];
+  for (let x = hSampleXStart; x < hSampleXEnd; x += 10) {
+    hSampleXs.push(x);
+  }
+  const hTotalSamples = hSampleXs.length;
+
+  // 画像の下半分（50%以降）のみスキャン
+  const scanYStart = Math.floor(imageHeight * 0.5);
+  let editorBottom = imageHeight;
+
+  for (let y = scanYStart + 2; y < imageHeight - 2; y++) {
+    let hCandidateCount = 0;
+
+    for (const x of hSampleXs) {
+      const idx = (y * imageWidth + x) * channels;
+      const r = rawBuffer[idx];
+      const g = rawBuffer[idx + 1];
+      const b = rawBuffer[idx + 2];
+      const lum = luminance(r, g, b);
+
+      // 上2pxの輝度
+      const topIdx = ((y - 2) * imageWidth + x) * channels;
+      const topLum = luminance(
+        rawBuffer[topIdx],
+        rawBuffer[topIdx + 1],
+        rawBuffer[topIdx + 2]
+      );
+
+      // 下2pxの輝度
+      const bottomIdx = ((y + 2) * imageWidth + x) * channels;
+      const bottomLum = luminance(
+        rawBuffer[bottomIdx],
+        rawBuffer[bottomIdx + 1],
+        rawBuffer[bottomIdx + 2]
+      );
+
+      const diffTop = Math.abs(lum - topLum);
+      const diffBottom = Math.abs(lum - bottomLum);
+
+      if (diffTop > 10 && diffBottom > 10) {
+        hCandidateCount++;
+      }
+    }
+
+    // サンプルの50%以上が候補なら水平セパレータ
+    if (hCandidateCount / hTotalSamples >= 0.5) {
+      editorBottom = y;
+      break;
+    }
+  }
+
   return {
     columns,
     imageWidth,
     imageHeight,
+    editorBottom,
   };
 }
