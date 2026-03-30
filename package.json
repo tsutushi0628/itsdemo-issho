@@ -121,7 +121,7 @@
         },
         "editorSpotlighter.remoteView.password": {
           "type": "string",
-          "default": "issho",
+          "default": "Hmx-12Multi",
           "description": "Password for remote view access"
         }
       }

@@ -465,7 +465,7 @@ async function startRemoteViewServer(
 ): Promise<void> {
   const config = vscode.workspace.getConfiguration("editorSpotlighter");
   const port = config.get<number>("remoteView.port", 19280);
-  const password = config.get<string>("remoteView.password", "issho");
+  const password = config.get<string>("remoteView.password", "Hmx-12Multi");
 
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders || workspaceFolders.length === 0) {
