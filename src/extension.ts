@@ -15,6 +15,7 @@ let remoteServer: RemoteViewServer | null = null;
 let remoteStatusBarItem: vscode.StatusBarItem | null = null;
 let remoteWebviewProvider: RemoteWebviewProvider | null = null;
 let mobileConnected = false;
+let activeHistory: number[] = [];
 
 interface WindowInfo {
   activeColumns: number;
@@ -107,6 +108,15 @@ export async function activate(
         return;
       }
 
+      // 既にアクティブなら先頭に移動
+      activeHistory = activeHistory.filter(i => i !== focusedGroupIndex);
+      activeHistory.unshift(focusedGroupIndex);
+      // activeColumns数を超えたら古いものを押し出す
+      if (activeHistory.length > activeColumns) {
+        activeHistory = activeHistory.slice(0, activeColumns);
+      }
+      const activeIndices = new Set(activeHistory);
+
       // ウルトラワイド等で全カラムアクティブなら等間隔に
       if (activeColumns >= totalColumns) {
         await resetToEqual(totalColumns);
@@ -116,12 +126,11 @@ export async function activate(
       // アコーディオン適用（常にtotalColumnsを使う）
       const layoutConfig: LayoutConfig = {
         totalColumns,
-        activeColumns,
         windowWidth,
         minColumnWidth,
       };
 
-      const layout = calculateLayout(layoutConfig, focusedGroupIndex);
+      const layout = calculateLayout(layoutConfig, activeIndices);
       try {
         await applyLayout(layout);
       } catch (error) {
@@ -423,13 +432,16 @@ export async function deactivate(): Promise<void> {
 }
 
 async function resetToEqual(totalColumns: number): Promise<void> {
+  const allIndices = new Set<number>();
+  for (let i = 0; i < totalColumns; i++) {
+    allIndices.add(i);
+  }
   const layoutConfig: LayoutConfig = {
     totalColumns,
-    activeColumns: totalColumns,
     windowWidth: 1,
     minColumnWidth: 1,
   };
-  const layout = calculateLayout(layoutConfig, 0);
+  const layout = calculateLayout(layoutConfig, allIndices);
   await applyLayout(layout);
 }
 
