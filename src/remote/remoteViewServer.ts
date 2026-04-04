@@ -1,20 +1,14 @@
 import http from "http";
 import { URL } from "url";
 import { WebSocketServer, WebSocket } from "ws";
-import { exec, execSync } from "child_process";
+import { exec } from "child_process";
 import sharp from "sharp";
 import { validatePassword, generateSessionToken } from "./tokenAuth";
 import { getMobileHtml, getLoginHtml } from "./mobileHtml";
 import { ClientMessage, ServerMessage, TabInfo } from "./protocol";
 import { detectPanelBoundaries, PanelBoundaries } from "./panelDetector";
+import { getVSCodeWindowId, getWindowBoundsSync, WindowBounds } from "../windowDetector";
 import net from "net";
-
-interface WindowBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
 
 export class RemoteViewServer {
   private httpServer: http.Server | null = null;
@@ -132,55 +126,13 @@ export class RemoteViewServer {
     this.stopCapture();
   }
 
-  private getVSCodeWindowId(): string {
-    const result = execSync(`swift -e '
-import CoreGraphics
-let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
-for w in list {
-    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code" || owner == "Visual Studio Code",
-       let bounds = w["kCGWindowBounds"] as? [String: Any],
-       let width = bounds["Width"] as? Double,
-       width >= 500,
-       let id = w["kCGWindowNumber"] as? Int {
-        print(id)
-        break
-    }
-}
-'`).toString().trim();
-    return result;
-  }
 
-  private getWindowBounds(): WindowBounds {
-    const result = execSync(`swift -e '
-import CoreGraphics
-let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
-for w in list {
-    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code" || owner == "Visual Studio Code",
-       let bounds = w["kCGWindowBounds"] as? [String: Any],
-       let width = bounds["Width"] as? Double,
-       width >= 500,
-       let x = bounds["X"] as? Double,
-       let y = bounds["Y"] as? Double,
-       let height = bounds["Height"] as? Double {
-        print("\\(x),\\(y),\\(width),\\(height)")
-        break
-    }
-}
-'`).toString().trim();
-    const parts = result.split(",");
-    return {
-      x: parseFloat(parts[0]),
-      y: parseFloat(parts[1]),
-      width: parseFloat(parts[2]),
-      height: parseFloat(parts[3]),
-    };
-  }
 
   async captureOnce(): Promise<void> {
     if (!this.wss || this.wss.clients.size === 0) return;
     if (this.capturing) return;
     if (!this.windowId) {
-      try { this.windowId = this.getVSCodeWindowId(); } catch { return; }
+      try { this.windowId = getVSCodeWindowId(); } catch { return; }
     }
 
     this.capturing = true;
@@ -223,7 +175,7 @@ for w in list {
 
   private handleClick(x: number, y: number): void {
     let bounds: WindowBounds;
-    try { bounds = this.getWindowBounds(); } catch { return; }
+    try { bounds = getWindowBoundsSync(); } catch { return; }
 
     // x,y はクロップ済み画像上の相対座標 (0-1)
     // panelCacheから選択中カラムの位置を取得
@@ -232,7 +184,7 @@ for w in list {
 
     // クロップ画像上の比率 → ウィンドウ全体のピクセル座標
     const imgX = col.left + x * col.width;
-    const imgY = y * (this.panelCache?.imageHeight ?? bounds.height);
+    const imgY = y * (this.panelCache?.editorBottom ?? bounds.height);
 
     // 画像ピクセル → ウィンドウ座標の比率変換
     const absX = Math.round(bounds.x + (imgX / (this.panelCache?.imageWidth ?? bounds.width)) * bounds.width);

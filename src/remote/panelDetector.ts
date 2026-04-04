@@ -133,7 +133,7 @@ export async function detectPanelBoundaries(
     return group[mid];
   });
 
-  // 最初のセパレータ＝サイドバー右端。それ以降がカラム境界
+  // サイドバー検出: 最初のセパレータがエディタ領域の20%未満の位置にある場合のみサイドバーとして除外
   if (separatorPositions.length < 1) {
     return {
       columns: [{ left: 0, width: imageWidth }],
@@ -143,12 +143,19 @@ export async function detectPanelBoundaries(
     };
   }
 
-  const sidebarEnd = separatorPositions[0];
-  const columnBoundaries = separatorPositions.slice(1);
+  let columnBoundaries: number[];
+  const firstSepRatio = separatorPositions[0] / imageWidth;
+  if (firstSepRatio < 0.2) {
+    // サイドバーあり: 最初のセパレータはサイドバー右端
+    columnBoundaries = separatorPositions.slice(1);
+  } else {
+    // サイドバーなし: 全セパレータがカラム間境界
+    columnBoundaries = separatorPositions;
+  }
 
   // カラムを生成
   const columns: { left: number; width: number }[] = [];
-  let currentLeft = sidebarEnd + 1;
+  let currentLeft = firstSepRatio < 0.2 ? separatorPositions[0] + 1 : 0;
 
   for (const boundary of columnBoundaries) {
     columns.push({
@@ -212,8 +219,8 @@ export async function detectPanelBoundaries(
       }
     }
 
-    // サンプルの50%以上が候補なら水平セパレータ
-    if (hCandidateCount / hTotalSamples >= 0.5) {
+    // サンプルの70%以上が候補なら水平セパレータ
+    if (hCandidateCount / hTotalSamples >= 0.7) {
       editorBottom = y;
       break;
     }

@@ -3,8 +3,8 @@ import * as vscode from "vscode";
 export interface LayoutConfig {
   totalColumns: number;
   activeColumns: number;
-  activeRatio: number;
-  inactiveRatio: number;
+  windowWidth: number;
+  minColumnWidth: number;
 }
 
 export interface EditorLayoutLeaf {
@@ -21,14 +21,7 @@ export function calculateLayout(
   config: LayoutConfig,
   focusedGroupIndex: number
 ): EditorLayout {
-  const { totalColumns, activeColumns, activeRatio, inactiveRatio } = config;
-
-  if (activeRatio <= 0) {
-    throw new Error(`activeRatio は正の数である必要があります: ${activeRatio}`);
-  }
-  if (inactiveRatio <= 0) {
-    throw new Error(`inactiveRatio は正の数である必要があります: ${inactiveRatio}`);
-  }
+  const { totalColumns, activeColumns, windowWidth, minColumnWidth } = config;
 
   if (activeColumns >= totalColumns) {
     const equalSize = 1 / totalColumns;
@@ -39,31 +32,27 @@ export function calculateLayout(
     return { orientation: 0, groups };
   }
 
+  // アクティブカラム1つの比率 = minColumnWidth / windowWidth
+  // ただしactiveColumns * activeSize > 1 の場合はactiveSize = 1/totalColumnsにフォールバック
+  const activeSize = Math.min(minColumnWidth / windowWidth, 1 / totalColumns);
+
+  // 残りを非アクティブで均等割り
+  const inactiveCount = totalColumns - activeColumns;
+  const remaining = 1 - activeColumns * activeSize;
+  const inactiveSize = inactiveCount > 0 ? remaining / inactiveCount : 0;
+
   const activeIndices = resolveActiveIndices(
     focusedGroupIndex,
     activeColumns,
     totalColumns
   );
 
-  let activeCount = 0;
-  let inactiveCount = 0;
-  for (let i = 0; i < totalColumns; i++) {
-    if (activeIndices.has(i)) {
-      activeCount++;
-    } else {
-      inactiveCount++;
-    }
-  }
-
-  const rawTotal =
-    activeCount * activeRatio + inactiveCount * inactiveRatio;
-
   const groups: EditorLayoutLeaf[] = [];
   for (let i = 0; i < totalColumns; i++) {
     if (activeIndices.has(i)) {
-      groups.push({ groups: [{}], size: activeRatio / rawTotal });
+      groups.push({ groups: [{}], size: activeSize });
     } else {
-      groups.push({ groups: [{}], size: inactiveRatio / rawTotal });
+      groups.push({ groups: [{}], size: inactiveSize });
     }
   }
 

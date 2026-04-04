@@ -1,10 +1,54 @@
-import { exec } from "child_process";
+import { exec, execSync } from "child_process";
 
 export interface WindowBounds {
   x: number;
   y: number;
   width: number;
   height: number;
+}
+
+export function getVSCodeWindowId(): string {
+  const result = execSync(`swift -e '
+import CoreGraphics
+let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
+for w in list {
+    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code" || owner == "Visual Studio Code",
+       let bounds = w["kCGWindowBounds"] as? [String: Any],
+       let width = bounds["Width"] as? Double,
+       width >= 500,
+       let id = w["kCGWindowNumber"] as? Int {
+        print(id)
+        break
+    }
+}
+'`).toString().trim();
+  return result;
+}
+
+export function getWindowBoundsSync(): WindowBounds {
+  const result = execSync(`swift -e '
+import CoreGraphics
+let list = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
+for w in list {
+    if let owner = w["kCGWindowOwnerName"] as? String, owner == "Code" || owner == "Visual Studio Code",
+       let bounds = w["kCGWindowBounds"] as? [String: Any],
+       let width = bounds["Width"] as? Double,
+       width >= 500,
+       let x = bounds["X"] as? Double,
+       let y = bounds["Y"] as? Double,
+       let height = bounds["Height"] as? Double {
+        print("\\(x),\\(y),\\(width),\\(height)")
+        break
+    }
+}
+'`).toString().trim();
+  const parts = result.split(",");
+  return {
+    x: parseFloat(parts[0]),
+    y: parseFloat(parts[1]),
+    width: parseFloat(parts[2]),
+    height: parseFloat(parts[3]),
+  };
 }
 
 export function getWindowBounds(): Promise<WindowBounds> {

@@ -79,16 +79,6 @@
           "default": 3000,
           "description": "この幅（px）以上のウィンドウでは全カラム等間隔で表示します"
         },
-        "editorSpotlighter.activeRatio": {
-          "type": "number",
-          "default": 0.35,
-          "description": "アクティブカラムの幅比率"
-        },
-        "editorSpotlighter.inactiveRatio": {
-          "type": "number",
-          "default": 0.1,
-          "description": "非アクティブカラムの幅比率"
-        },
         "editorSpotlighter.enabled": {
           "type": "boolean",
           "default": true,

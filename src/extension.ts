@@ -16,13 +16,19 @@ let remoteStatusBarItem: vscode.StatusBarItem | null = null;
 let remoteWebviewProvider: RemoteWebviewProvider | null = null;
 let mobileConnected = false;
 
+interface WindowInfo {
+  activeColumns: number;
+  windowWidth: number;
+}
+
 async function recalculateActiveColumns(
   totalColumns: number,
   minColumnWidth: number,
   fullWidthThreshold: number
-): Promise<number> {
+): Promise<WindowInfo> {
   const windowWidth = await detectWindowWidth();
-  return computeActiveColumns(windowWidth, minColumnWidth, totalColumns, fullWidthThreshold);
+  const activeColumns = computeActiveColumns(windowWidth, minColumnWidth, totalColumns, fullWidthThreshold);
+  return { activeColumns, windowWidth };
 }
 
 export async function activate(
@@ -39,40 +45,33 @@ export async function activate(
   await applyTabSettings(config);
 
   let totalColumns = config.get<number>("totalColumns", 4);
-  let activeRatio = config.get<number>("activeRatio", 0.35);
-  let inactiveRatio = config.get<number>("inactiveRatio", 0.1);
   let minColumnWidth = config.get<number>("minColumnWidth", 850);
   let fullWidthThreshold = config.get<number>("fullWidthThreshold", 3000);
 
   let activeColumns: number;
+  let windowWidth: number;
 
   try {
-    activeColumns = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold);
+    const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold);
+    activeColumns = info.activeColumns;
+    windowWidth = info.windowWidth;
   } catch (error) {
     activeColumns = totalColumns;
+    windowWidth = totalColumns * minColumnWidth;
     vscode.window.showWarningMessage(
       `Editor Spotlighter: ウィンドウ幅検出に失敗したため等間隔モードで動作します。(${(error as Error).message})`
     );
   }
 
-  outputChannel.appendLine(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}`);
-
-  // デバッグ: ログをファイルにも書き出す
-  const fs = require("fs");
-  const debugLogPath = "/tmp/editor-spotlighter-debug.log";
-  function debugLog(msg: string) {
-    const line = `${new Date().toISOString()} ${msg}\n`;
-    outputChannel.appendLine(msg);
-    fs.appendFileSync(debugLogPath, line);
-  }
-  debugLog(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}`);
+  outputChannel.appendLine(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}, windowWidth=${windowWidth}`);
 
   // ウィンドウ幅の再取得（整形ボタン or 初回のみ）
   const refreshWindowWidth = async () => {
     try {
-      const newActiveColumns = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold);
-      activeColumns = newActiveColumns;
-      debugLog(`[width-refresh] activeColumns=${activeColumns}`);
+      const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold);
+      activeColumns = info.activeColumns;
+      windowWidth = info.windowWidth;
+      outputChannel.appendLine(`[width-refresh] activeColumns=${activeColumns}, windowWidth=${windowWidth}`);
     } catch {
       // 取得失敗時は前の値を維持
     }
@@ -90,8 +89,6 @@ export async function activate(
     debounceTimer = setTimeout(async () => {
       debounceTimer = undefined;
 
-      debugLog(`[focus] activeColumns=${activeColumns}, totalColumns=${totalColumns}`);
-
       const tabGroups = vscode.window.tabGroups;
       const activeGroup = tabGroups.activeTabGroup;
 
@@ -103,6 +100,8 @@ export async function activate(
           break;
         }
       }
+
+      outputChannel.appendLine(`[focus] activeColumns=${activeColumns}, totalColumns=${totalColumns}, groups=${allGroups.length}, focused=${focusedGroupIndex}`);
 
       if (focusedGroupIndex < 0) {
         return;
@@ -118,8 +117,8 @@ export async function activate(
       const layoutConfig: LayoutConfig = {
         totalColumns,
         activeColumns,
-        activeRatio,
-        inactiveRatio,
+        windowWidth,
+        minColumnWidth,
       };
 
       const layout = calculateLayout(layoutConfig, focusedGroupIndex);
@@ -215,17 +214,17 @@ export async function activate(
 
   // モバイル接続時のコールバック定義
   const handleMobileConnect = async () => {
-    debugLog("[mobile] connected");
+    outputChannel.appendLine("[mobile] connected");
     mobileConnected = true;
     if (remoteServer) {
       remoteServer.setColumnCount(totalColumns);
       remoteServer.captureOnce();
     }
-    debugLog("[mobile] column count set");
+    outputChannel.appendLine("[mobile] column count set");
   };
 
   const handleMobileDisconnect = async () => {
-    debugLog("[mobile] disconnected");
+    outputChannel.appendLine("[mobile] disconnected");
     mobileConnected = false;
   };
 
@@ -381,13 +380,8 @@ export async function activate(
       const updated = vscode.workspace.getConfiguration("editorSpotlighter");
       enabled = updated.get<boolean>("enabled", true);
       totalColumns = updated.get<number>("totalColumns", 4);
-      activeRatio = updated.get<number>("activeRatio", 0.35);
-      inactiveRatio = updated.get<number>("inactiveRatio", 0.1);
       minColumnWidth = updated.get<number>("minColumnWidth", 850);
       fullWidthThreshold = updated.get<number>("fullWidthThreshold", 3000);
-      openInNextColumn = updated.get<boolean>("openInNextColumn", true);
-
-      onFocusChange();
 
       if (remoteServer && mobileConnected) {
         remoteServer.setColumnCount(totalColumns);
@@ -421,9 +415,6 @@ export async function deactivate(): Promise<void> {
     debounceTimer = undefined;
   }
 
-  if (remoteServer) {
-    remoteServer.stopAll();
-  }
   await stopRemoteViewServer();
 
   const config = vscode.workspace.getConfiguration("editorSpotlighter");
@@ -435,8 +426,8 @@ async function resetToEqual(totalColumns: number): Promise<void> {
   const layoutConfig: LayoutConfig = {
     totalColumns,
     activeColumns: totalColumns,
-    activeRatio: 1,
-    inactiveRatio: 1,
+    windowWidth: 1,
+    minColumnWidth: 1,
   };
   const layout = calculateLayout(layoutConfig, 0);
   await applyLayout(layout);
