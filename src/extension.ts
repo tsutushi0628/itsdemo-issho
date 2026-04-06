@@ -101,6 +101,14 @@ export async function activate(
           break;
         }
       }
+      // ウィンドウ幅を再取得してactiveColumnsを更新
+      try {
+        const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold);
+        activeColumns = info.activeColumns;
+        windowWidth = info.windowWidth;
+      } catch {
+        // 取得失敗時は前の値を維持
+      }
 
       outputChannel.appendLine(`[focus] activeColumns=${activeColumns}, totalColumns=${totalColumns}, groups=${allGroups.length}, focused=${focusedGroupIndex}`);
 
