@@ -144,7 +144,8 @@ export async function activate(
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
-      onFocusChange();
+      // 履歴もリセット（全カラムをアクティブ扱いに）
+      activeHistory = [];
 
       // モバイル接続中はタブ情報を更新（viewportは不要）
       if (mobileConnected && remoteServer) {
@@ -193,7 +194,8 @@ export async function activate(
         if (activeColumns > totalColumns) {
           activeColumns = totalColumns;
         }
-        onFocusChange();
+        // 履歴もリセット（全カラムをアクティブ扱いに）
+      activeHistory = [];
       }
     )
   );
@@ -206,8 +208,9 @@ export async function activate(
 
   context.subscriptions.push(
     vscode.commands.registerCommand("editorSpotlighter.alignLayout", async () => {
-      await refreshWindowWidth();
-      onFocusChange();
+      await resetToEqual(totalColumns);
+      // 履歴もリセット（全カラムをアクティブ扱いに）
+      activeHistory = [];
       vscode.window.showInformationMessage(
         "Editor Spotlighter: レイアウトを整形しました"
       );
@@ -413,7 +416,8 @@ export async function activate(
         })();
       }
 
-      onFocusChange();
+      // 履歴もリセット（全カラムをアクティブ扱いに）
+      activeHistory = [];
     })
   );
 }
