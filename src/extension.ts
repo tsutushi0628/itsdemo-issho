@@ -111,6 +111,10 @@ export async function activate(
       }
 
       outputChannel.appendLine(`[focus] activeColumns=${activeColumns}, totalColumns=${totalColumns}, groups=${allGroups.length}, focused=${focusedGroupIndex}`);
+      const fs2 = require("fs");
+      fs2.appendFileSync("/tmp/editor-spotlighter-debug.log",
+        `${new Date().toISOString()} [focus] activeColumns=${activeColumns}, totalColumns=${totalColumns}, groups=${allGroups.length}, focused=${focusedGroupIndex}, windowWidth=${windowWidth}, minColumnWidth=${minColumnWidth}, historyLen=${activeHistory.length}, history=[${activeHistory.join(',')}]\n`
+      );
 
       if (focusedGroupIndex < 0) {
         return;
@@ -127,6 +131,10 @@ export async function activate(
 
       // ウルトラワイド等で全カラムアクティブなら等間隔に
       if (activeColumns >= totalColumns) {
+        const fs2_reset = require("fs");
+        fs2_reset.appendFileSync("/tmp/editor-spotlighter-debug.log",
+          `${new Date().toISOString()} [reset-equal] activeColumns=${activeColumns} >= totalColumns=${totalColumns}\n`
+        );
         await resetToEqual(totalColumns);
         return;
       }
@@ -139,6 +147,9 @@ export async function activate(
       };
 
       const layout = calculateLayout(layoutConfig, activeIndices);
+      fs2.appendFileSync("/tmp/editor-spotlighter-debug.log",
+        `${new Date().toISOString()} [apply-layout] config=${JSON.stringify(layoutConfig)}, activeIndices=[${[...activeIndices].join(',')}]\n`
+      );
       try {
         await applyLayout(layout);
       } catch (error) {
@@ -152,10 +163,9 @@ export async function activate(
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
-      // 履歴もリセット（全カラムをアクティブ扱いに）
-      activeHistory = [];
+      onFocusChange();
 
-      // モバイル接続中はタブ情報を更新（viewportは不要）
+      // モバイル接続中はタブ情報を更新
       if (mobileConnected && remoteServer) {
         updateRemoteTabs();
       }
