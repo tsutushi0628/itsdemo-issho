@@ -157,10 +157,8 @@ export async function activate(
       }
       const activeIndices = new Set(activeHistory);
 
-      // ウルトラワイド等で全カラムアクティブなら等間隔に
+      // ウルトラワイド等で全カラムアクティブならレイアウトを触らない
       if (activeColumns >= totalColumns) {
-        log(`[reset-equal] activeColumns=${activeColumns} >= totalColumns=${totalColumns}`);
-        await resetToEqual(totalColumns);
         return;
       }
 
@@ -511,6 +509,10 @@ async function resetToEqual(totalColumns: number): Promise<void> {
     minColumnWidth: 1,
   };
   const layout = calculateLayout(layoutConfig, allIndices);
+  const sizes = layout.groups.map((g, i) => `col${i}=${(g.size * 100).toFixed(1)}%`).join(', ');
+  const fs = require("fs");
+  try { fs.appendFileSync("/tmp/editor-spotlighter-debug.log", `${new Date(Date.now() + 9*60*60*1000).toISOString().replace('T',' ').replace('Z',' JST')} [reset-equal] totalColumns=${totalColumns}, sizes=[${sizes}]
+`); } catch {}
   await applyLayout(layout);
 }
 

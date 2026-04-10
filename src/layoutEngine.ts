@@ -56,6 +56,10 @@ export function calculateLayout(
 }
 
 export async function applyLayout(layout: EditorLayout): Promise<void> {
+  const fs = require("fs");
+  const now = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const ts = now.toISOString().replace('T', ' ').replace('Z', ' JST');
+  try { fs.appendFileSync("/tmp/editor-spotlighter-debug.log", `${ts} [vscode-layout] ${JSON.stringify(layout)}\n`); } catch {}
   await vscode.commands.executeCommand(
     "vscode.setEditorLayout",
     layout
