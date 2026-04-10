@@ -175,9 +175,20 @@ export async function activate(
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
+      log(`[event] onDidChangeActiveTextEditor fired: editor=${editor?.document?.fileName ?? 'none'}, viewColumn=${editor?.viewColumn ?? 'none'}`);
       onFocusChange();
 
       // モバイル接続中はタブ情報を更新
+      if (mobileConnected && remoteServer) {
+        updateRemoteTabs();
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.window.tabGroups.onDidChangeTabGroups((e) => {
+      log(`[event] onDidChangeTabGroups fired`);
+      onFocusChange();
       if (mobileConnected && remoteServer) {
         updateRemoteTabs();
       }
