@@ -1,3 +1,4 @@
+import { detectPanelBoundaries } from "./remote/panelDetector";
 import { exec, execSync } from "child_process";
 
 export interface WindowBounds {
@@ -220,4 +221,31 @@ export function parseLinuxGeometry(stdout: string): number {
   }
 
   return parseInt(match[1], 10);
+}
+
+export async function detectEditorWidth(): Promise<{ windowWidth: number; editorWidth: number; sidebarWidth: number }> {
+  // 1. ウィンドウIDを取得
+  const windowId = getVSCodeWindowId();
+
+  // 2. screencaptureでキャプチャ
+  await new Promise<void>((resolve, reject) => {
+    exec(`screencapture -x -o -l ${windowId} -t jpg /tmp/es-sidebar-detect.jpg`, (err) => {
+      if (err) {
+        reject(new Error(`screencapture failed: ${err.message}`));
+        return;
+      }
+      resolve();
+    });
+  });
+
+  // 3. panelDetectorで境界検出
+  const boundaries = await detectPanelBoundaries("/tmp/es-sidebar-detect.jpg");
+
+  // 4. サイドバー幅を計算（Retinaの場合、画像は2倍。ウィンドウ幅で割って論理ピクセルに変換）
+  const windowWidth = await detectWindowWidth();
+  const scale = boundaries.imageWidth / windowWidth;  // Retinaスケール
+  const sidebarPx = boundaries.columns.length > 0 ? Math.round(boundaries.columns[0].left / scale) : 0;
+  const editorWidth = windowWidth - sidebarPx;
+
+  return { windowWidth, editorWidth, sidebarWidth: sidebarPx };
 }

@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as os from "os";
 import { exec } from "child_process";
 import QRCode from "qrcode";
-import { detectWindowWidth } from "./windowDetector";
+import { detectWindowWidth, detectEditorWidth } from "./windowDetector";
 import { computeActiveColumns } from "./columnCalculator";
 import { calculateLayout, applyLayout, LayoutConfig } from "./layoutEngine";
 import { TabTreeProvider } from "./tabTreeProvider";
@@ -16,6 +16,7 @@ let remoteStatusBarItem: vscode.StatusBarItem | null = null;
 let remoteWebviewProvider: RemoteWebviewProvider | null = null;
 let mobileConnected = false;
 let activeHistory: number[] = [];
+let sidebarWidth = 0;
 
 interface WindowInfo {
   activeColumns: number;
@@ -85,7 +86,17 @@ export async function activate(
     );
   }
 
-  log(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}, windowWidth=${windowWidth}`);
+  // サイドバー幅を計測
+  try {
+    const editorInfo = await detectEditorWidth();
+    sidebarWidth = editorInfo.sidebarWidth;
+    windowWidth = editorInfo.windowWidth;
+    log(`[init] sidebarWidth=${sidebarWidth}, editorWidth=${editorInfo.editorWidth}`);
+  } catch {
+    sidebarWidth = 0;
+  }
+
+  log(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}, windowWidth=${windowWidth}, sidebarWidth=${sidebarWidth}`);
 
   // ウィンドウ幅の再取得（整形ボタン or 初回のみ）
   const refreshWindowWidth = async () => {
@@ -156,7 +167,7 @@ export async function activate(
       // アコーディオン適用（常にtotalColumnsを使う）
       const layoutConfig: LayoutConfig = {
         totalColumns,
-        windowWidth,
+        windowWidth: windowWidth - sidebarWidth,  // エディタ領域の幅
         minColumnWidth,
       };
 
@@ -166,7 +177,7 @@ export async function activate(
         const isActive = activeIndices.has(i);
         return `col${i}=${(g.size * 100).toFixed(1)}%(${pxEstimate}px)${isActive ? '*' : ''}`;
       }).join(', ');
-      log(`[apply-layout] windowWidth=${windowWidth}, activeColumns=${activeColumns}, sizes=[${sizes}]`);
+      log(`[apply-layout] windowWidth=${windowWidth}, sidebarWidth=${sidebarWidth}, editorWidth=${windowWidth - sidebarWidth}, activeColumns=${activeColumns}, sizes=[${sizes}]`);
       try {
         await applyLayout(layout);
       } catch (error) {
@@ -254,6 +265,14 @@ export async function activate(
 
   context.subscriptions.push(
     vscode.commands.registerCommand("editorSpotlighter.alignLayout", async () => {
+      try {
+        const editorInfo = await detectEditorWidth();
+        sidebarWidth = editorInfo.sidebarWidth;
+        windowWidth = editorInfo.windowWidth;
+        log(`[align] sidebarWidth=${sidebarWidth}, editorWidth=${editorInfo.editorWidth}`);
+      } catch {
+        // 取得失敗時は前の値を維持
+      }
       await resetToEqual(totalColumns);
       // 履歴もリセット（全カラムをアクティブ扱いに）
       activeHistory = [];
