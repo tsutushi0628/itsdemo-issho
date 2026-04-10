@@ -161,7 +161,12 @@ export async function activate(
       };
 
       const layout = calculateLayout(layoutConfig, activeIndices);
-      log(`[apply-layout] config=${JSON.stringify(layoutConfig)}, activeIndices=[${[...activeIndices].join(',')}]`);
+      const sizes = layout.groups.map((g, i) => {
+        const pxEstimate = Math.round(g.size * windowWidth);
+        const isActive = activeIndices.has(i);
+        return `col${i}=${(g.size * 100).toFixed(1)}%(${pxEstimate}px)${isActive ? '*' : ''}`;
+      }).join(', ');
+      log(`[apply-layout] windowWidth=${windowWidth}, activeColumns=${activeColumns}, sizes=[${sizes}]`);
       try {
         await applyLayout(layout);
       } catch (error) {
