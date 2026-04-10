@@ -36,7 +36,28 @@ export async function activate(
   context: vscode.ExtensionContext
 ): Promise<void> {
   const outputChannel = vscode.window.createOutputChannel("Editor Spotlighter");
-  outputChannel.appendLine("=== Editor Spotlighter activated ===");
+
+  const fs = require("fs");
+  const LOG_PATH = "/tmp/editor-spotlighter-debug.log";
+  function log(msg: string) {
+    const now = new Date();
+    const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+    const ts = jst.toISOString().replace('T', ' ').replace('Z', ' JST');
+    const line = `${ts} ${msg}\n`;
+    outputChannel.appendLine(msg);
+    try { fs.appendFileSync(LOG_PATH, line); } catch {}
+  }
+
+  // ログローテーション: 1MB超えたら後半512KBに切り詰め
+  try {
+    const stat = fs.statSync(LOG_PATH);
+    if (stat.size > 1024 * 1024) {
+      const content = fs.readFileSync(LOG_PATH, "utf-8");
+      fs.writeFileSync(LOG_PATH, content.slice(-512 * 1024));
+    }
+  } catch {}
+
+  log("=== Editor Spotlighter activated ===");
 
   const config = vscode.workspace.getConfiguration("editorSpotlighter");
   enabled = config.get<boolean>("enabled", true);
@@ -64,7 +85,7 @@ export async function activate(
     );
   }
 
-  outputChannel.appendLine(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}, windowWidth=${windowWidth}`);
+  log(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}, windowWidth=${windowWidth}`);
 
   // ウィンドウ幅の再取得（整形ボタン or 初回のみ）
   const refreshWindowWidth = async () => {
@@ -72,7 +93,7 @@ export async function activate(
       const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold);
       activeColumns = info.activeColumns;
       windowWidth = info.windowWidth;
-      outputChannel.appendLine(`[width-refresh] activeColumns=${activeColumns}, windowWidth=${windowWidth}`);
+      log(`[width-refresh] activeColumns=${activeColumns}, windowWidth=${windowWidth}`);
     } catch {
       // 取得失敗時は前の値を維持
     }
@@ -110,11 +131,7 @@ export async function activate(
         // 取得失敗時は前の値を維持
       }
 
-      outputChannel.appendLine(`[focus] activeColumns=${activeColumns}, totalColumns=${totalColumns}, groups=${allGroups.length}, focused=${focusedGroupIndex}`);
-      const fs2 = require("fs");
-      fs2.appendFileSync("/tmp/editor-spotlighter-debug.log",
-        `${new Date().toISOString()} [focus] activeColumns=${activeColumns}, totalColumns=${totalColumns}, groups=${allGroups.length}, focused=${focusedGroupIndex}, windowWidth=${windowWidth}, minColumnWidth=${minColumnWidth}, historyLen=${activeHistory.length}, history=[${activeHistory.join(',')}]\n`
-      );
+      log(`[focus] activeColumns=${activeColumns}, totalColumns=${totalColumns}, groups=${allGroups.length}, focused=${focusedGroupIndex}, windowWidth=${windowWidth}, minColumnWidth=${minColumnWidth}, historyLen=${activeHistory.length}, history=[${activeHistory.join(',')}]`);
 
       if (focusedGroupIndex < 0) {
         return;
@@ -131,10 +148,7 @@ export async function activate(
 
       // ウルトラワイド等で全カラムアクティブなら等間隔に
       if (activeColumns >= totalColumns) {
-        const fs2_reset = require("fs");
-        fs2_reset.appendFileSync("/tmp/editor-spotlighter-debug.log",
-          `${new Date().toISOString()} [reset-equal] activeColumns=${activeColumns} >= totalColumns=${totalColumns}\n`
-        );
+        log(`[reset-equal] activeColumns=${activeColumns} >= totalColumns=${totalColumns}`);
         await resetToEqual(totalColumns);
         return;
       }
@@ -147,9 +161,7 @@ export async function activate(
       };
 
       const layout = calculateLayout(layoutConfig, activeIndices);
-      fs2.appendFileSync("/tmp/editor-spotlighter-debug.log",
-        `${new Date().toISOString()} [apply-layout] config=${JSON.stringify(layoutConfig)}, activeIndices=[${[...activeIndices].join(',')}]\n`
-      );
+      log(`[apply-layout] config=${JSON.stringify(layoutConfig)}, activeIndices=[${[...activeIndices].join(',')}]`);
       try {
         await applyLayout(layout);
       } catch (error) {
@@ -244,17 +256,17 @@ export async function activate(
 
   // モバイル接続時のコールバック定義
   const handleMobileConnect = async () => {
-    outputChannel.appendLine("[mobile] connected");
+    log("[mobile] connected");
     mobileConnected = true;
     if (remoteServer) {
       remoteServer.setColumnCount(totalColumns);
       remoteServer.captureOnce();
     }
-    outputChannel.appendLine("[mobile] column count set");
+    log("[mobile] column count set");
   };
 
   const handleMobileDisconnect = async () => {
-    outputChannel.appendLine("[mobile] disconnected");
+    log("[mobile] disconnected");
     mobileConnected = false;
   };
 
