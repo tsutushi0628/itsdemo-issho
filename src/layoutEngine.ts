@@ -32,7 +32,7 @@ export function calculateLayout(
     return { orientation: 0, groups };
   }
 
-  const VSCODE_MIN_GROUP_WIDTH = 220;
+  const VSCODE_MIN_GROUP_WIDTH = 230;
   const activeCount = activeIndices.size;
   const inactiveCount = totalColumns - activeCount;
 

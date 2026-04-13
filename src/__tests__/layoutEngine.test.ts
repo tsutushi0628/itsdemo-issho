@@ -9,7 +9,7 @@ vi.mock("vscode", () => ({
 import { calculateLayout } from "../layoutEngine";
 import type { LayoutConfig } from "../layoutEngine";
 
-const VSCODE_MIN = 220;
+const VSCODE_MIN = 230;
 
 describe("calculateLayout", () => {
   it("activeIndices.size >= totalColumns のとき等間隔になる", () => {
@@ -39,7 +39,7 @@ describe("calculateLayout", () => {
 
     expect(result.groups).toHaveLength(4);
 
-    // inactiveSize = 220/4000 = 0.055
+    // inactiveSize = 230/4000 = 0.0575
     // activeSize = (1 - 2*0.055) / 2 = 0.445
     const inactiveSize = VSCODE_MIN / 4000;
     const activeSize = (1 - 2 * inactiveSize) / 2;
@@ -102,7 +102,7 @@ describe("calculateLayout", () => {
     expect(total).toBeCloseTo(1.0);
   });
 
-  it("非アクティブカラムが常に220pxになる", () => {
+  it("非アクティブカラムが常に230pxになる", () => {
     const config: LayoutConfig = {
       totalColumns: 4,
       windowWidth: 1414,
@@ -120,7 +120,7 @@ describe("calculateLayout", () => {
     expect(result.groups[2].size).toBeCloseTo(inactiveSize);
     expect(result.groups[3].size).toBeCloseTo(inactiveSize);
 
-    // 非アクティブカラムが220pxであることを確認
+    // 非アクティブカラムが230pxであることを確認
     expect(result.groups[1].size * 1414).toBeCloseTo(VSCODE_MIN);
   });
 
@@ -135,7 +135,7 @@ describe("calculateLayout", () => {
 
     expect(result.groups).toHaveLength(4);
 
-    // inactiveSize = 220/1414 ≈ 0.1556
+    // inactiveSize = 230/1414 ≈ 0.1556
     // activeSize = (1 - 3*0.1556) / 1 ≈ 0.5333
     const inactiveSize = VSCODE_MIN / 1414;
     const activeSize = (1 - 3 * inactiveSize) / 1;
@@ -147,7 +147,7 @@ describe("calculateLayout", () => {
 
     // アクティブカラムのピクセル幅 ≈ 754px
     expect(activeSize * 1414).toBeCloseTo(1414 - 3 * VSCODE_MIN);
-    // 非アクティブカラムのピクセル幅 = 220px
+    // 非アクティブカラムのピクセル幅 = 230px
     expect(inactiveSize * 1414).toBeCloseTo(VSCODE_MIN);
     // activeSize > inactiveSize
     expect(activeSize).toBeGreaterThan(inactiveSize);
@@ -162,8 +162,8 @@ describe("calculateLayout", () => {
 
     const result = calculateLayout(config, new Set([1]));
 
-    // inactiveSize = 220/4000 = 0.055
-    // activeSize = (1 - 3*0.055) / 1 = 0.835
+    // inactiveSize = 230/4000 = 0.0575
+    // activeSize = (1 - 3*0.0575) / 1 = 0.8275
     const inactiveSize = VSCODE_MIN / 4000;
     const activeSize = (1 - 3 * inactiveSize) / 1;
 
@@ -172,7 +172,7 @@ describe("calculateLayout", () => {
     expect(result.groups[2].size).toBeCloseTo(inactiveSize);
     expect(result.groups[3].size).toBeCloseTo(inactiveSize);
 
-    // 非アクティブカラムのピクセル幅が220pxになることを確認
+    // 非アクティブカラムのピクセル幅が230pxになることを確認
     expect(inactiveSize * 4000).toBeCloseTo(VSCODE_MIN);
   });
 
@@ -185,8 +185,8 @@ describe("calculateLayout", () => {
 
     const result = calculateLayout(config, new Set([0, 1]));
 
-    // inactiveSize = 220/1000 = 0.22
-    // activeSize = (1 - 2*0.22) / 2 = 0.28
+    // inactiveSize = 230/1000 = 0.23
+    // activeSize = (1 - 2*0.23) / 2 = 0.27
     const inactiveSize = VSCODE_MIN / 1000;
     const activeSize = (1 - 2 * inactiveSize) / 2;
 
