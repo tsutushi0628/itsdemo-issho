@@ -9,6 +9,8 @@ vi.mock("vscode", () => ({
 import { calculateLayout } from "../layoutEngine";
 import type { LayoutConfig } from "../layoutEngine";
 
+const VSCODE_MIN = 220;
+
 describe("calculateLayout", () => {
   it("activeIndices.size >= totalColumns のとき等間隔になる", () => {
     const config: LayoutConfig = {
@@ -26,7 +28,7 @@ describe("calculateLayout", () => {
     }
   });
 
-  it("activeIndices.size < totalColumns のときアクティブカラムが指定幅になる", () => {
+  it("activeIndices.size < totalColumns のときアクティブカラムが残り幅を取る", () => {
     const config: LayoutConfig = {
       totalColumns: 4,
       windowWidth: 4000,
@@ -37,10 +39,10 @@ describe("calculateLayout", () => {
 
     expect(result.groups).toHaveLength(4);
 
-    // activeSize = 850/4000 = 0.2125
-    // inactiveSize = (1 - 2*0.2125) / 2 = 0.2875
-    const activeSize = 850 / 4000;
-    const inactiveSize = (1 - 2 * activeSize) / 2;
+    // inactiveSize = 220/4000 = 0.055
+    // activeSize = (1 - 2*0.055) / 2 = 0.445
+    const inactiveSize = VSCODE_MIN / 4000;
+    const activeSize = (1 - 2 * inactiveSize) / 2;
 
     expect(result.groups[0].size).toBeCloseTo(inactiveSize); // inactive
     expect(result.groups[1].size).toBeCloseTo(activeSize);   // active
@@ -58,8 +60,8 @@ describe("calculateLayout", () => {
     const result = calculateLayout(config, new Set([0, 1]));
 
     expect(result.groups).toHaveLength(4);
-    const activeSize = 850 / 4000;
-    const inactiveSize = (1 - 2 * activeSize) / 2;
+    const inactiveSize = VSCODE_MIN / 4000;
+    const activeSize = (1 - 2 * inactiveSize) / 2;
     expect(result.groups[0].size).toBeCloseTo(activeSize);
     expect(result.groups[1].size).toBeCloseTo(activeSize);
     expect(result.groups[2].size).toBeCloseTo(inactiveSize);
@@ -76,8 +78,8 @@ describe("calculateLayout", () => {
     const result = calculateLayout(config, new Set([2, 3]));
 
     expect(result.groups).toHaveLength(4);
-    const activeSize = 850 / 4000;
-    const inactiveSize = (1 - 2 * activeSize) / 2;
+    const inactiveSize = VSCODE_MIN / 4000;
+    const activeSize = (1 - 2 * inactiveSize) / 2;
     expect(result.groups[0].size).toBeCloseTo(inactiveSize);
     expect(result.groups[1].size).toBeCloseTo(inactiveSize);
     expect(result.groups[2].size).toBeCloseTo(activeSize);
@@ -100,72 +102,58 @@ describe("calculateLayout", () => {
     expect(total).toBeCloseTo(1.0);
   });
 
-  it("minColumnWidthがwindowWidthより大きい場合、95%クランプが適用される", () => {
+  it("非アクティブカラムが常に220pxになる", () => {
     const config: LayoutConfig = {
       totalColumns: 4,
-      windowWidth: 500,
+      windowWidth: 1414,
       minColumnWidth: 850,
     };
 
     const result = calculateLayout(config, new Set([0]));
 
-    // 850/500 = 1.7, 1 * 1.7 > 0.95 → activeSize = 0.95/1 = 0.95
     expect(result.groups).toHaveLength(4);
-    const activeSize = 0.95;
-    const inactiveSize = (1 - activeSize) / 3;
+    const inactiveSize = VSCODE_MIN / 1414;
+    const activeSize = (1 - 3 * inactiveSize) / 1;
+
     expect(result.groups[0].size).toBeCloseTo(activeSize);
     expect(result.groups[1].size).toBeCloseTo(inactiveSize);
     expect(result.groups[2].size).toBeCloseTo(inactiveSize);
     expect(result.groups[3].size).toBeCloseTo(inactiveSize);
+
+    // 非アクティブカラムが220pxであることを確認
+    expect(result.groups[1].size * 1414).toBeCloseTo(VSCODE_MIN);
   });
 
-  it("narrowウィンドウではアクティブとインアクティブに差がつく（95%クランプ）", () => {
-    // 旧ロジックでは等間隔にフォールバックしていたが、新ロジックでは差がつく
+  it("MBA 14インチ(1414px)で4カラム1アクティブの場合のsize検証", () => {
     const config: LayoutConfig = {
       totalColumns: 4,
-      windowWidth: 1440,
+      windowWidth: 1414,
       minColumnWidth: 850,
     };
 
     const result = calculateLayout(config, new Set([0]));
 
     expect(result.groups).toHaveLength(4);
-    // 850/1440 ≈ 0.5903, 1 * 0.5903 < 0.95 → クランプ不要、activeSize = 0.5903
-    const activeSize = 850 / 1440;
-    const inactiveSize = (1 - activeSize) / 3;
+
+    // inactiveSize = 220/1414 ≈ 0.1556
+    // activeSize = (1 - 3*0.1556) / 1 ≈ 0.5333
+    const inactiveSize = VSCODE_MIN / 1414;
+    const activeSize = (1 - 3 * inactiveSize) / 1;
 
     expect(result.groups[0].size).toBeCloseTo(activeSize);
     expect(result.groups[1].size).toBeCloseTo(inactiveSize);
     expect(result.groups[2].size).toBeCloseTo(inactiveSize);
     expect(result.groups[3].size).toBeCloseTo(inactiveSize);
-    // アクティブとインアクティブに差がある
+
+    // アクティブカラムのピクセル幅 ≈ 754px
+    expect(activeSize * 1414).toBeCloseTo(1414 - 3 * VSCODE_MIN);
+    // 非アクティブカラムのピクセル幅 = 220px
+    expect(inactiveSize * 1414).toBeCloseTo(VSCODE_MIN);
+    // activeSize > inactiveSize
     expect(activeSize).toBeGreaterThan(inactiveSize);
   });
 
-  it("MBA 14インチで4カラム1アクティブの場合のsize検証", () => {
-    const config: LayoutConfig = {
-      totalColumns: 4,
-      windowWidth: 1440,
-      minColumnWidth: 850,
-    };
-
-    const result = calculateLayout(config, new Set([0]));
-
-    expect(result.groups).toHaveLength(4);
-
-    // 850/1440 ≈ 0.5903, クランプ不要
-    const activeSize = 850 / 1440;
-    const inactiveSize = (1 - activeSize) / 3;
-
-    expect(result.groups[0].size).toBeCloseTo(activeSize);
-    expect(result.groups[1].size).toBeCloseTo(inactiveSize);
-    expect(result.groups[2].size).toBeCloseTo(inactiveSize);
-    expect(result.groups[3].size).toBeCloseTo(inactiveSize);
-    // 新ロジック: activeSize > inactiveSize（等間隔にはならない）
-    expect(activeSize).toBeGreaterThan(inactiveSize);
-  });
-
-  it("ウルトラワイドでアクティブカラムが固定幅を確保する", () => {
+  it("ウルトラワイドでアクティブカラムが残り全幅を確保する", () => {
     const config: LayoutConfig = {
       totalColumns: 4,
       windowWidth: 4000,
@@ -174,20 +162,21 @@ describe("calculateLayout", () => {
 
     const result = calculateLayout(config, new Set([1]));
 
-    // activeSize = 850/4000 = 0.2125
-    const activeSize = 850 / 4000;
-    const inactiveSize = (1 - activeSize) / 3;
+    // inactiveSize = 220/4000 = 0.055
+    // activeSize = (1 - 3*0.055) / 1 = 0.835
+    const inactiveSize = VSCODE_MIN / 4000;
+    const activeSize = (1 - 3 * inactiveSize) / 1;
 
     expect(result.groups[0].size).toBeCloseTo(inactiveSize);
     expect(result.groups[1].size).toBeCloseTo(activeSize);
     expect(result.groups[2].size).toBeCloseTo(inactiveSize);
     expect(result.groups[3].size).toBeCloseTo(inactiveSize);
 
-    // アクティブカラムのピクセル幅が850pxになることを確認
-    expect(activeSize * 4000).toBeCloseTo(850);
+    // 非アクティブカラムのピクセル幅が220pxになることを確認
+    expect(inactiveSize * 4000).toBeCloseTo(VSCODE_MIN);
   });
 
-  it("複数アクティブで95%クランプが適用される場合", () => {
+  it("複数アクティブでsize合計が1になる", () => {
     const config: LayoutConfig = {
       totalColumns: 4,
       windowWidth: 1000,
@@ -196,9 +185,10 @@ describe("calculateLayout", () => {
 
     const result = calculateLayout(config, new Set([0, 1]));
 
-    // 850/1000 = 0.85, 2 * 0.85 = 1.7 > 0.95 → activeSize = 0.95/2 = 0.475
-    const activeSize = 0.95 / 2;
-    const inactiveSize = (1 - 2 * activeSize) / 2;
+    // inactiveSize = 220/1000 = 0.22
+    // activeSize = (1 - 2*0.22) / 2 = 0.28
+    const inactiveSize = VSCODE_MIN / 1000;
+    const activeSize = (1 - 2 * inactiveSize) / 2;
 
     expect(result.groups[0].size).toBeCloseTo(activeSize);
     expect(result.groups[1].size).toBeCloseTo(activeSize);

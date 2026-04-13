@@ -20,7 +20,7 @@ export function calculateLayout(
   config: LayoutConfig,
   activeIndices: Set<number>
 ): EditorLayout {
-  const { totalColumns, windowWidth, minColumnWidth } = config;
+  const { totalColumns, windowWidth } = config;
   const activeColumns = activeIndices.size;
 
   if (activeColumns >= totalColumns) {
@@ -32,16 +32,15 @@ export function calculateLayout(
     return { orientation: 0, groups };
   }
 
-  let activeSize = minColumnWidth / windowWidth;
+  const VSCODE_MIN_GROUP_WIDTH = 220;
   const activeCount = activeIndices.size;
-  if (activeCount * activeSize > 0.95) {
-    activeSize = 0.95 / activeCount;
-  }
+  const inactiveCount = totalColumns - activeCount;
 
-  // 残りを非アクティブで均等割り
-  const inactiveCount = totalColumns - activeColumns;
-  const remaining = 1 - activeColumns * activeSize;
-  const inactiveSize = inactiveCount > 0 ? remaining / inactiveCount : 0;
+  // 非アクティブを220px固定、残りをアクティブで均等割り
+  const inactiveSize = VSCODE_MIN_GROUP_WIDTH / windowWidth;
+  const activeSize = inactiveCount > 0
+    ? (1 - inactiveCount * inactiveSize) / activeCount
+    : 1 / totalColumns;
 
   const groups: EditorLayoutLeaf[] = [];
   for (let i = 0; i < totalColumns; i++) {
