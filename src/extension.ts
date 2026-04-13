@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as os from "os";
 import { exec } from "child_process";
 import QRCode from "qrcode";
-import { detectWindowWidth, detectEditorWidth } from "./windowDetector";
+import { detectWindowWidth } from "./windowDetector";
 import { computeActiveColumns } from "./columnCalculator";
 import { calculateLayout, applyLayout, LayoutConfig } from "./layoutEngine";
 import { TabTreeProvider } from "./tabTreeProvider";
@@ -16,7 +16,7 @@ let remoteStatusBarItem: vscode.StatusBarItem | null = null;
 let remoteWebviewProvider: RemoteWebviewProvider | null = null;
 let mobileConnected = false;
 let activeHistory: number[] = [];
-let sidebarWidth = 0;
+const sidebarWidth = 300;
 
 interface WindowInfo {
   activeColumns: number;
@@ -84,16 +84,6 @@ export async function activate(
     vscode.window.showWarningMessage(
       `Editor Spotlighter: ウィンドウ幅検出に失敗したため等間隔モードで動作します。(${(error as Error).message})`
     );
-  }
-
-  // サイドバー幅を計測
-  try {
-    const editorInfo = await detectEditorWidth();
-    sidebarWidth = editorInfo.sidebarWidth;
-    windowWidth = editorInfo.windowWidth;
-    log(`[init] sidebarWidth=${sidebarWidth}, editorWidth=${editorInfo.editorWidth}`);
-  } catch {
-    sidebarWidth = 0;
   }
 
   log(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}, windowWidth=${windowWidth}, sidebarWidth=${sidebarWidth}`);
@@ -263,14 +253,6 @@ export async function activate(
 
   context.subscriptions.push(
     vscode.commands.registerCommand("editorSpotlighter.alignLayout", async () => {
-      try {
-        const editorInfo = await detectEditorWidth();
-        sidebarWidth = editorInfo.sidebarWidth;
-        windowWidth = editorInfo.windowWidth;
-        log(`[align] sidebarWidth=${sidebarWidth}, editorWidth=${editorInfo.editorWidth}`);
-      } catch {
-        // 取得失敗時は前の値を維持
-      }
       await resetToEqual(totalColumns);
       // 履歴もリセット（全カラムをアクティブ扱いに）
       activeHistory = [];
