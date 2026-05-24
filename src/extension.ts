@@ -20,7 +20,14 @@ let activeHistory: number[] = [];
 let applyingLayout = false;
 let lastLayoutSignature: string | undefined;
 let lastSidebarAutoTarget: SidebarTargetState | undefined;
-const sidebarWidth = 300;
+const SIDEBAR_OPEN_WIDTH = 300;
+
+function getEffectiveSidebarWidth(): number {
+  if (lastSidebarAutoTarget === "close") {
+    return 0;
+  }
+  return SIDEBAR_OPEN_WIDTH;
+}
 
 async function syncSidebarToActiveColumns(activeColumns: number): Promise<void> {
   const target = decideSidebarTargetState(activeColumns);
@@ -112,7 +119,7 @@ export async function activate(
     );
   }
 
-  log(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}, windowWidth=${windowWidth}, sidebarWidth=${sidebarWidth}`);
+  log(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}, windowWidth=${windowWidth}, sidebarOpenWidth=${SIDEBAR_OPEN_WIDTH}`);
 
   await syncSidebarToActiveColumns(activeColumns);
 
@@ -187,15 +194,17 @@ export async function activate(
       }
 
       // アコーディオン適用（常にtotalColumnsを使う）
+      const effectiveSidebarWidth = getEffectiveSidebarWidth();
+      const editorWidth = windowWidth - effectiveSidebarWidth;
       const layoutConfig: LayoutConfig = {
         totalColumns,
-        windowWidth: windowWidth - sidebarWidth,  // エディタ領域の幅
+        windowWidth: editorWidth,  // エディタ領域の幅
         minColumnWidth,
       };
 
       const layout = calculateLayout(layoutConfig, activeIndices);
       const sizes = layout.groups.map((g, i) => {
-        const pxEstimate = Math.round(g.size * windowWidth);
+        const pxEstimate = Math.round(g.size * editorWidth);
         const isActive = activeIndices.has(i);
         return `col${i}=${(g.size * 100).toFixed(1)}%(${pxEstimate}px)${isActive ? '*' : ''}`;
       }).join(', ');
@@ -205,7 +214,7 @@ export async function activate(
         return;
       }
 
-      log(`[apply-layout] windowWidth=${windowWidth}, sidebarWidth=${sidebarWidth}, editorWidth=${windowWidth - sidebarWidth}, activeColumns=${activeColumns}, sizes=[${sizes}]`);
+      log(`[apply-layout] windowWidth=${windowWidth}, effectiveSidebarWidth=${effectiveSidebarWidth}, editorWidth=${editorWidth}, activeColumns=${activeColumns}, sizes=[${sizes}]`);
       applyingLayout = true;
       try {
         await applyLayout(layout);
