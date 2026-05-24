@@ -65,7 +65,7 @@
       "properties": {
         "editorSpotlighter.totalColumns": {
           "type": "number",
-          "default": 4,
+          "default": 5,
           "description": "総カラム数"
         },
         "editorSpotlighter.minColumnWidth": {

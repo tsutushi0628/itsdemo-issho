@@ -5,6 +5,7 @@ import QRCode from "qrcode";
 import { detectWindowWidth } from "./windowDetector";
 import { computeActiveColumns } from "./columnCalculator";
 import { calculateLayout, applyLayout, LayoutConfig } from "./layoutEngine";
+import { decideSidebarTargetState, SidebarTargetState } from "./sidebarPolicy";
 import { TabTreeProvider } from "./tabTreeProvider";
 import { RemoteViewServer } from "./remote/remoteViewServer";
 import { RemoteWebviewProvider } from "./remoteWebviewProvider";
@@ -16,7 +17,32 @@ let remoteStatusBarItem: vscode.StatusBarItem | null = null;
 let remoteWebviewProvider: RemoteWebviewProvider | null = null;
 let mobileConnected = false;
 let activeHistory: number[] = [];
+let applyingLayout = false;
+let lastLayoutSignature: string | undefined;
+let lastSidebarAutoTarget: SidebarTargetState | undefined;
 const sidebarWidth = 300;
+
+async function syncSidebarToActiveColumns(activeColumns: number): Promise<void> {
+  const target = decideSidebarTargetState(activeColumns);
+  if (target === lastSidebarAutoTarget) {
+    return;
+  }
+  lastSidebarAutoTarget = target;
+  try {
+    if (target === "close") {
+      await vscode.commands.executeCommand("workbench.action.closeSidebar");
+    } else {
+      await vscode.commands.executeCommand("workbench.action.focusSideBar");
+      // フォーカスを直前のエディタへ戻す（サイドバーは開いたまま）
+      await vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup");
+    }
+  } catch {
+    // 失敗時は次回再試行できるよう状態を巻き戻す
+    lastSidebarAutoTarget = undefined;
+  }
+}
+
+const SUPPRESS_EVENT_MS = 250;
 
 interface WindowInfo {
   activeColumns: number;
@@ -88,6 +114,8 @@ export async function activate(
 
   log(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}, windowWidth=${windowWidth}, sidebarWidth=${sidebarWidth}`);
 
+  await syncSidebarToActiveColumns(activeColumns);
+
   // ウィンドウ幅の再取得（整形ボタン or 初回のみ）
   const refreshWindowWidth = async () => {
     try {
@@ -102,6 +130,10 @@ export async function activate(
 
   const onFocusChange = () => {
     if (!enabled) {
+      return;
+    }
+
+    if (applyingLayout) {
       return;
     }
 
@@ -131,6 +163,8 @@ export async function activate(
       } catch {
         // 取得失敗時は前の値を維持
       }
+
+      await syncSidebarToActiveColumns(activeColumns);
 
       log(`[focus] activeColumns=${activeColumns}, totalColumns=${totalColumns}, groups=${allGroups.length}, focused=${focusedGroupIndex}, windowWidth=${windowWidth}, minColumnWidth=${minColumnWidth}, historyLen=${activeHistory.length}, history=[${activeHistory.join(',')}]`);
 
@@ -165,14 +199,24 @@ export async function activate(
         const isActive = activeIndices.has(i);
         return `col${i}=${(g.size * 100).toFixed(1)}%(${pxEstimate}px)${isActive ? '*' : ''}`;
       }).join(', ');
+      const signature = layout.groups.map(g => g.size.toFixed(4)).join('|');
+      if (signature === lastLayoutSignature) {
+        log(`[apply-layout-skip] unchanged signature=${signature}`);
+        return;
+      }
+
       log(`[apply-layout] windowWidth=${windowWidth}, sidebarWidth=${sidebarWidth}, editorWidth=${windowWidth - sidebarWidth}, activeColumns=${activeColumns}, sizes=[${sizes}]`);
+      applyingLayout = true;
       try {
         await applyLayout(layout);
+        lastLayoutSignature = signature;
       } catch (error) {
         vscode.window.showWarningMessage(
           `Editor Spotlighter: レイアウト適用に失敗しました。(${(error as Error).message})`
         );
         throw error;
+      } finally {
+        setTimeout(() => { applyingLayout = false; }, SUPPRESS_EVENT_MS);
       }
     }, 200);
   };
@@ -495,7 +539,13 @@ async function resetToEqual(totalColumns: number): Promise<void> {
   const fs = require("fs");
   try { fs.appendFileSync("/tmp/editor-spotlighter-debug.log", `${new Date(Date.now() + 9*60*60*1000).toISOString().replace('T',' ').replace('Z',' JST')} [reset-equal] totalColumns=${totalColumns}, sizes=[${sizes}]
 `); } catch {}
-  await applyLayout(layout);
+  applyingLayout = true;
+  try {
+    await applyLayout(layout);
+    lastLayoutSignature = layout.groups.map(g => g.size.toFixed(4)).join('|');
+  } finally {
+    setTimeout(() => { applyingLayout = false; }, SUPPRESS_EVENT_MS);
+  }
 }
 
 function getLocalIpAddress(): string {
