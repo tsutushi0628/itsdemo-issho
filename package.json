@@ -70,9 +70,9 @@
         },
         "editorSpotlighter.minColumnWidth": {
           "type": "number",
-          "default": 800,
+          "default": 600,
           "minimum": 100,
-          "description": "1カラムの最小快適幅（px）。ウィンドウ幅をこの値で割ってアクティブカラム数を自動決定します"
+          "description": "アクティブ枠の最小許容幅（px）。エディタ領域幅とこの値からアクティブカラム数を自動決定します"
         },
         "editorSpotlighter.fullWidthThreshold": {
           "type": "number",

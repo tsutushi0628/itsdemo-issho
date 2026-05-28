@@ -59,10 +59,12 @@ interface WindowInfo {
 async function recalculateActiveColumns(
   totalColumns: number,
   minColumnWidth: number,
-  fullWidthThreshold: number
+  fullWidthThreshold: number,
+  effectiveSidebarWidth: number = 0
 ): Promise<WindowInfo> {
   const windowWidth = await detectWindowWidth();
-  const activeColumns = computeActiveColumns(windowWidth, minColumnWidth, totalColumns, fullWidthThreshold);
+  const editorWidth = windowWidth - effectiveSidebarWidth;
+  const activeColumns = computeActiveColumns(editorWidth, minColumnWidth, totalColumns, fullWidthThreshold);
   return { activeColumns, windowWidth };
 }
 
@@ -100,15 +102,15 @@ export async function activate(
   // activate時にタブ設定を初期反映
   await applyTabSettings(config);
 
-  let totalColumns = config.get<number>("totalColumns", 4);
-  let minColumnWidth = config.get<number>("minColumnWidth", 850);
+  let totalColumns = config.get<number>("totalColumns", 5);
+  let minColumnWidth = config.get<number>("minColumnWidth", 600);
   let fullWidthThreshold = config.get<number>("fullWidthThreshold", 3000);
 
   let activeColumns: number;
   let windowWidth: number;
 
   try {
-    const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold);
+    const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold, getEffectiveSidebarWidth());
     activeColumns = info.activeColumns;
     windowWidth = info.windowWidth;
   } catch (error) {
@@ -126,7 +128,7 @@ export async function activate(
   // ウィンドウ幅の再取得（整形ボタン or 初回のみ）
   const refreshWindowWidth = async () => {
     try {
-      const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold);
+      const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold, getEffectiveSidebarWidth());
       activeColumns = info.activeColumns;
       windowWidth = info.windowWidth;
       log(`[width-refresh] activeColumns=${activeColumns}, windowWidth=${windowWidth}`);
@@ -164,7 +166,7 @@ export async function activate(
       }
       // ウィンドウ幅を再取得してactiveColumnsを更新
       try {
-        const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold);
+        const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold, getEffectiveSidebarWidth());
         activeColumns = info.activeColumns;
         windowWidth = info.windowWidth;
       } catch {
@@ -293,7 +295,13 @@ export async function activate(
           activeColumns = totalColumns;
         }
         // 履歴もリセット（全カラムをアクティブ扱いに）
-      activeHistory = [];
+        activeHistory = [];
+        await vscode.workspace.getConfiguration("editorSpotlighter").update(
+          "totalColumns",
+          totalColumns,
+          vscode.ConfigurationTarget.Global
+        );
+        onFocusChange();
       }
     )
   );
@@ -489,8 +497,8 @@ export async function activate(
       }
       const updated = vscode.workspace.getConfiguration("editorSpotlighter");
       enabled = updated.get<boolean>("enabled", true);
-      totalColumns = updated.get<number>("totalColumns", 4);
-      minColumnWidth = updated.get<number>("minColumnWidth", 850);
+      totalColumns = updated.get<number>("totalColumns", 5);
+      minColumnWidth = updated.get<number>("minColumnWidth", 600);
       fullWidthThreshold = updated.get<number>("fullWidthThreshold", 3000);
 
       if (remoteServer && mobileConnected) {
@@ -529,7 +537,7 @@ export async function deactivate(): Promise<void> {
   await stopRemoteViewServer();
 
   const config = vscode.workspace.getConfiguration("editorSpotlighter");
-  const totalColumns = config.get<number>("totalColumns", 4);
+  const totalColumns = config.get<number>("totalColumns", 5);
   await resetToEqual(totalColumns);
 }
 

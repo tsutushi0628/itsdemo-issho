@@ -8,8 +8,9 @@ vi.mock("vscode", () => ({
 
 import { calculateLayout } from "../layoutEngine";
 import type { LayoutConfig } from "../layoutEngine";
+import { computeActiveColumns } from "../columnCalculator";
 
-const VSCODE_MIN = 230;
+const VSCODE_MIN = 220;
 
 describe("calculateLayout", () => {
   it("activeIndices.size >= totalColumns のとき等間隔になる", () => {
@@ -201,5 +202,54 @@ describe("calculateLayout", () => {
       total += group.size;
     }
     expect(total).toBeCloseTo(1.0);
+  });
+});
+
+describe("27インチ運用 業務意図シナリオ", () => {
+  const MIN_ACTIVE_WIDTH = 600;
+  const TOTAL_COLUMNS = 5;
+  const FULL_WIDTH_THRESHOLD = 3000;
+
+  it("シナリオA: 27インチ・サイドバー開（editorWidth=2260）で活性幅600px以上を維持", () => {
+    const editorWidth = 2260;
+    const n = computeActiveColumns(editorWidth, MIN_ACTIVE_WIDTH, TOTAL_COLUMNS, FULL_WIDTH_THRESHOLD);
+    const activeIndices = new Set(Array.from({ length: n }, (_, i) => i));
+    const config: LayoutConfig = { totalColumns: TOTAL_COLUMNS, windowWidth: editorWidth, minColumnWidth: MIN_ACTIVE_WIDTH };
+    const layout = calculateLayout(config, activeIndices);
+    const activeGroupSize = layout.groups[0].size;
+    const activeWidthPx = activeGroupSize * editorWidth;
+    expect(activeWidthPx).toBeGreaterThanOrEqual(MIN_ACTIVE_WIDTH);
+    // 活性数Nも確認（1以上・totalColumns以下）
+    expect(n).toBeGreaterThanOrEqual(1);
+    expect(n).toBeLessThanOrEqual(TOTAL_COLUMNS);
+  });
+
+  it("シナリオB: 27インチ・サイドバー閉（editorWidth=2560）で活性幅600px以上を維持", () => {
+    const editorWidth = 2560;
+    const n = computeActiveColumns(editorWidth, MIN_ACTIVE_WIDTH, TOTAL_COLUMNS, FULL_WIDTH_THRESHOLD);
+    const activeIndices = new Set(Array.from({ length: n }, (_, i) => i));
+    const config: LayoutConfig = { totalColumns: TOTAL_COLUMNS, windowWidth: editorWidth, minColumnWidth: MIN_ACTIVE_WIDTH };
+    const layout = calculateLayout(config, activeIndices);
+    const activeGroupSize = layout.groups[0].size;
+    const activeWidthPx = activeGroupSize * editorWidth;
+    expect(activeWidthPx).toBeGreaterThanOrEqual(MIN_ACTIVE_WIDTH);
+    expect(n).toBeGreaterThanOrEqual(1);
+    expect(n).toBeLessThanOrEqual(TOTAL_COLUMNS);
+  });
+
+  it("シナリオC: ウルトラワイド（editorWidth=3140）で等間隔モードになり各幅600px以上", () => {
+    const editorWidth = 3140;
+    const n = computeActiveColumns(editorWidth, MIN_ACTIVE_WIDTH, TOTAL_COLUMNS, FULL_WIDTH_THRESHOLD);
+    // fullWidthThreshold=3000以上なので等間隔（N=totalColumns）
+    expect(n).toBe(TOTAL_COLUMNS);
+    const activeIndices = new Set(Array.from({ length: n }, (_, i) => i));
+    const config: LayoutConfig = { totalColumns: TOTAL_COLUMNS, windowWidth: editorWidth, minColumnWidth: MIN_ACTIVE_WIDTH };
+    const layout = calculateLayout(config, activeIndices);
+    // 等間隔モード: 各カラム ≈ editorWidth/totalColumns
+    const expectedSize = 1 / TOTAL_COLUMNS;
+    for (const group of layout.groups) {
+      expect(group.size).toBeCloseTo(expectedSize);
+      expect(group.size * editorWidth).toBeGreaterThanOrEqual(MIN_ACTIVE_WIDTH);
+    }
   });
 });

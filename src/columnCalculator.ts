@@ -1,29 +1,29 @@
 /**
- * ウィンドウ幅と最小カラム幅からアクティブカラム数を計算する。
+ * エディタ領域幅・最小許容幅・非アクティブ固定幅から活性カラム数を計算する。
  *
  * fullWidthThreshold以上の幅ではtotalColumnsをそのまま返す（全カラム等間隔表示）。
- * それ以外: activeColumns = Math.min(Math.floor(windowWidth / minColumnWidth), totalColumns)
- * 結果が1未満の場合は1にクランプする。
+ * それ以外: N=totalColumns から1まで減らして
+ *   (editorWidth - (totalColumns - N) * inactiveFixedWidth) / N >= minColumnWidth
+ * を満たす最大のNを返す。1個も満たさない場合は1にクランプ。
  */
 export function computeActiveColumns(
-  windowWidth: number,
+  editorWidth: number,
   minColumnWidth: number,
   totalColumns: number,
-  fullWidthThreshold: number
+  fullWidthThreshold: number,
+  inactiveFixedWidth: number = 220
 ): number {
-  if (windowWidth >= fullWidthThreshold) {
+  if (editorWidth >= fullWidthThreshold) {
     return totalColumns;
   }
 
-  const computed = Math.floor(windowWidth / minColumnWidth);
-
-  if (computed < 1) {
-    return 1;
+  for (let n = totalColumns; n >= 1; n--) {
+    const inactiveCount = totalColumns - n;
+    const activeWidth = (editorWidth - inactiveCount * inactiveFixedWidth) / n;
+    if (activeWidth >= minColumnWidth) {
+      return n;
+    }
   }
 
-  if (computed > totalColumns) {
-    return totalColumns;
-  }
-
-  return computed;
+  return 1;
 }

@@ -1,81 +1,83 @@
 import { describe, it, expect } from "vitest";
 import { computeActiveColumns } from "../columnCalculator";
 
+const INACTIVE_FIXED = 220;
+
+function activeWidth(editorWidth: number, totalColumns: number, n: number): number {
+  const inactiveCount = totalColumns - n;
+  return (editorWidth - inactiveCount * INACTIVE_FIXED) / n;
+}
+
 describe("computeActiveColumns", () => {
-  it("ウィンドウ幅1600px / 最小幅400px → 4カラム", () => {
-    const result = computeActiveColumns(1600, 400, 6, 3000);
-    expect(result).toBe(4);
+  it("活性幅が最小許容幅以上を保てる最大のNを返す（基本）", () => {
+    // editorWidth=2260, min=600, total=5
+    // N=3: (2260-2×220)/3=606.7>=600 ✓, N=4: (2260-220)/4=510<600 ✗
+    const n = computeActiveColumns(2260, 600, 5, 3000);
+    expect(n).toBe(3);
+    expect(activeWidth(2260, 5, n)).toBeGreaterThanOrEqual(600);
   });
 
-  it("ウィンドウ幅1200px / 最小幅400px → 3カラム", () => {
-    const result = computeActiveColumns(1200, 400, 6, 3000);
-    expect(result).toBe(3);
+  it("活性幅がちょうど最小許容幅と等しい場合はそのNを採用する", () => {
+    // N=4: (1600-0×220)/4=400>=400 ✓（totalColumns=4なので非アクティブ0本）
+    const n = computeActiveColumns(1600, 400, 4, 3000);
+    expect(n).toBe(4);
+    expect(activeWidth(1600, 4, n)).toBeGreaterThanOrEqual(400);
   });
 
-  it("ウィンドウ幅800px / 最小幅400px → 2カラム", () => {
-    const result = computeActiveColumns(800, 400, 4, 3000);
-    expect(result).toBe(2);
+  it("fullWidthThreshold以上のとき全カラムを返す", () => {
+    const n = computeActiveColumns(3000, 600, 5, 3000);
+    expect(n).toBe(5);
   });
 
-  it("計算結果がtotalColumnsを超える場合はtotalColumnsを返す", () => {
-    const result = computeActiveColumns(2900, 400, 4, 3000);
-    expect(result).toBe(4);
+  it("3840pxのウルトラワイドでもfullWidthThresholdを超えれば全カラムを返す", () => {
+    const n = computeActiveColumns(3840, 600, 5, 3000);
+    expect(n).toBe(5);
   });
 
-  it("計算結果がちょうどtotalColumnsと同じ場合はtotalColumnsを返す", () => {
-    const result = computeActiveColumns(1600, 400, 4, 3000);
-    expect(result).toBe(4);
+  it("fullWidthThreshold未満でも活性幅が確保できるなら多カラムを返す", () => {
+    // editorWidth=2900, min=400, total=4
+    // N=4: (2900-0×220)/4=725>=400 ✓
+    const n = computeActiveColumns(2900, 400, 4, 3000);
+    expect(n).toBe(4);
+    expect(activeWidth(2900, 4, n)).toBeGreaterThanOrEqual(400);
   });
 
-  it("ウィンドウ幅が最小幅未満の場合は1を返す（クランプ）", () => {
-    const result = computeActiveColumns(300, 400, 4, 3000);
-    expect(result).toBe(1);
+  it("エディタ幅が最小許容幅より小さくても1を返す（クランプ）", () => {
+    const n = computeActiveColumns(300, 400, 4, 3000);
+    expect(n).toBe(1);
   });
 
-  it("ウィンドウ幅0の場合は1を返す（クランプ）", () => {
-    const result = computeActiveColumns(0, 400, 4, 3000);
-    expect(result).toBe(1);
+  it("エディタ幅0でも1を返す（クランプ）", () => {
+    const n = computeActiveColumns(0, 400, 4, 3000);
+    expect(n).toBe(1);
   });
 
-  it("端数は切り捨てられる（1599px / 400px → 3）", () => {
-    const result = computeActiveColumns(1599, 400, 6, 3000);
-    expect(result).toBe(3);
-  });
-
-  it("最小幅を大きく設定するとカラム数が減る", () => {
-    const result = computeActiveColumns(1920, 800, 4, 3000);
-    expect(result).toBe(2);
-  });
-
-  it("最小幅を小さく設定するとカラム数が増える", () => {
-    const result = computeActiveColumns(1920, 200, 12, 3000);
-    expect(result).toBe(9);
+  it("totalColumns=12でエディタ幅が足りない場合は1にクランプされる", () => {
+    // editorWidth=1920, min=200, total=12
+    // N=1でも (1920-11×220)/1=-500<200 → 条件を満たすNが存在しないため1にクランプ
+    const n = computeActiveColumns(1920, 200, 12, 3000);
+    expect(n).toBe(1);
   });
 
   describe("fullWidthThreshold", () => {
     it("3000px以上のウルトラワイドではtotalColumnsを返す", () => {
-      const result = computeActiveColumns(3000, 850, 4, 3000);
-      expect(result).toBe(4);
+      const n = computeActiveColumns(3000, 850, 4, 3000);
+      expect(n).toBe(4);
     });
 
-    it("3840pxのウルトラワイドではtotalColumnsを返す", () => {
-      const result = computeActiveColumns(3840, 850, 4, 3000);
-      expect(result).toBe(4);
+    it("fullWidthThreshold未満では活性幅保証ロジックが働く", () => {
+      // editorWidth=2718, min=850, total=4
+      // N=4: 2718/4=679.5<850 → N=3: (2718-220)/3=832.7<850 → N=2: (2718-2×220)/2=1139>=850
+      const n = computeActiveColumns(2718, 850, 4, 3000);
+      expect(n).toBe(2);
+      expect(activeWidth(2718, 4, n)).toBeGreaterThanOrEqual(850);
     });
 
-    it("2718px → 3カラム（2718/850=3.19）", () => {
-      const result = computeActiveColumns(2718, 850, 4, 3000);
-      expect(result).toBe(3);
-    });
-
-    it("1864px → 2カラム（1864/850=2.19）", () => {
-      const result = computeActiveColumns(1864, 850, 4, 3000);
-      expect(result).toBe(2);
-    });
-
-    it("1440px → 1カラム（1440/850=1.69）", () => {
-      const result = computeActiveColumns(1440, 850, 4, 3000);
-      expect(result).toBe(1);
+    it("幅が狭い場合は1カラムにクランプされる", () => {
+      // editorWidth=1440, min=850, total=4
+      // N=1: (1440-3×220)/1=780<850 → クランプ1
+      const n = computeActiveColumns(1440, 850, 4, 3000);
+      expect(n).toBe(1);
     });
   });
 });
