@@ -9,6 +9,11 @@ import { decideSidebarTargetState, SidebarTargetState } from "./sidebarPolicy";
 import { TabTreeProvider } from "./tabTreeProvider";
 import { RemoteViewServer } from "./remote/remoteViewServer";
 import { RemoteWebviewProvider } from "./remoteWebviewProvider";
+import { generateRemotePassword } from "./remote/tokenAuth";
+
+// 出荷時に固定で入っていた既知パスワード。設定にこの値が残っている場合は
+// 「未設定」とみなして起動時にランダム生成へ切り替える（既知の弱い資格情報を無効化）。
+const LEGACY_DEFAULT_PASSWORD = "Hmx-12Multi";
 
 let enabled = true;
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -21,6 +26,12 @@ let applyingLayout = false;
 let lastLayoutSignature: string | undefined;
 let lastSidebarAutoTarget: SidebarTargetState | undefined;
 const SIDEBAR_OPEN_WIDTH = 300;
+// VS Code はエディタ群の最小幅を 220px でハードコードしている（設定不可）。
+// 幅検出は OS ウィンドウ全幅を返すが、実際のエディタ格子はスクロールバー・群間の
+// 仕切り・枠の分だけ狭い。全幅で比率を作ると、VS Code がその比率を実領域へ
+// スケールした際に非アクティブ列が 220px を割り、VS Code 側がクランプして
+// レイアウトが指定通りにならない。実領域を必ず下回るよう保守的に差し引く安全マージン。
+const EDITOR_CHROME_MARGIN = 30;
 
 function getEffectiveSidebarWidth(): number {
   if (lastSidebarAutoTarget === "close") {
@@ -63,7 +74,7 @@ async function recalculateActiveColumns(
   effectiveSidebarWidth: number = 0
 ): Promise<WindowInfo> {
   const windowWidth = await detectWindowWidth();
-  const editorWidth = windowWidth - effectiveSidebarWidth;
+  const editorWidth = Math.max(1, windowWidth - effectiveSidebarWidth - EDITOR_CHROME_MARGIN);
   const activeColumns = computeActiveColumns(editorWidth, minColumnWidth, totalColumns, fullWidthThreshold);
   return { activeColumns, windowWidth };
 }
@@ -197,7 +208,7 @@ export async function activate(
 
       // アコーディオン適用（常にtotalColumnsを使う）
       const effectiveSidebarWidth = getEffectiveSidebarWidth();
-      const editorWidth = windowWidth - effectiveSidebarWidth;
+      const editorWidth = Math.max(1, windowWidth - effectiveSidebarWidth - EDITOR_CHROME_MARGIN);
       const layoutConfig: LayoutConfig = {
         totalColumns,
         windowWidth: editorWidth,  // エディタ領域の幅
@@ -588,7 +599,17 @@ async function startRemoteViewServer(
 ): Promise<void> {
   const config = vscode.workspace.getConfiguration("editorSpotlighter");
   const port = config.get<number>("remoteView.port", 19280);
-  const password = config.get<string>("remoteView.password", "Hmx-12Multi");
+  const configuredPassword = config.get<string>("remoteView.password", "");
+  // 未設定または旧固定値なら、起動ごとに高エントロピーのワンタイムパスワードを生成。
+  // 生成値はサイドバーUIに表示し、ユーザーがスマホで入力する。
+  const password =
+    !configuredPassword || configuredPassword === LEGACY_DEFAULT_PASSWORD
+      ? generateRemotePassword()
+      : configuredPassword;
+  // リモート入力（キーボード/クリック/タブ切替）の許可。閲覧専用にしたい場合は false。
+  const allowRemoteInput = config.get<boolean>("remoteView.allowRemoteInput", true);
+  // bind 先。既定は LAN（スマホ直結）。トンネル専用なら "127.0.0.1" に設定可能。
+  const bindAddress = config.get<string>("remoteView.bindAddress", "0.0.0.0");
 
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders || workspaceFolders.length === 0) {
@@ -599,7 +620,7 @@ async function startRemoteViewServer(
   }
   const projectPath = workspaceFolders[0].uri.fsPath;
 
-  remoteServer = new RemoteViewServer(password, projectPath);
+  remoteServer = new RemoteViewServer(password, projectPath, allowRemoteInput);
 
   remoteServer.onFirstConnect(() => {
     mobileConnected = true;
@@ -616,6 +637,10 @@ async function startRemoteViewServer(
 
   remoteServer.onClientMessage(async (msg) => {
     if (msg.type === "type") {
+      // サーバ側でも検証済みだが、入力注入は防衛多層化のため型・長さを再検証。
+      if (typeof msg.text !== "string" || msg.text.length === 0 || msg.text.length > 2000) {
+        return;
+      }
       await vscode.env.clipboard.writeText(msg.text);
 
       // まずClaude Codeのフォーカスを試みる
@@ -625,16 +650,31 @@ async function startRemoteViewServer(
         // Claude Code extension may not be installed
       }
 
-      // フォーカス完了まで少し待ってからキーストローク送信
+      // フォーカス完了まで少し待ってからキーストローク送信。
+      // ただし「前面アプリが VS Code のときだけ」貼り付け+Enterを送る。
+      // 別アプリ（ターミナル等）が前面に来ている隙に誤爆させないためのガード。
       setTimeout(() => {
-        exec(`osascript -e 'tell application "System Events" to keystroke "v" using command down' -e 'delay 0.3' -e 'tell application "System Events" to keystroke return'`, (err) => {
-          if (err) {
-            console.error(`[Editor Spotlighter][type] osascript error: ${err.message}`);
-            vscode.window.showWarningMessage(
-              "Editor Spotlighter: テキスト送信にはアクセシビリティ権限が必要です。システム設定 → プライバシーとセキュリティ → アクセシビリティ で Visual Studio Code を許可してください。"
-            );
+        exec(
+          `osascript -e 'tell application "System Events" to name of first application process whose frontmost is true'`,
+          (frontErr, frontStdout) => {
+            const front = (frontStdout || "").trim();
+            const isVSCode = /code|electron|visual studio code/i.test(front);
+            if (frontErr || !isVSCode) {
+              vscode.window.showWarningMessage(
+                `Editor Spotlighter: 前面アプリ（${front || "不明"}）がVS Codeでないため、リモート入力を中止しました。`
+              );
+              return;
+            }
+            exec(`osascript -e 'tell application "System Events" to keystroke "v" using command down' -e 'delay 0.3' -e 'tell application "System Events" to keystroke return'`, (err) => {
+              if (err) {
+                console.error(`[Editor Spotlighter][type] osascript error: ${err.message}`);
+                vscode.window.showWarningMessage(
+                  "Editor Spotlighter: テキスト送信にはアクセシビリティ権限が必要です。システム設定 → プライバシーとセキュリティ → アクセシビリティ で Visual Studio Code を許可してください。"
+                );
+              }
+            });
           }
-        });
+        );
       }, 500);
     } else if (msg.type === "switchTab") {
       const groups = vscode.window.tabGroups.all;
@@ -655,7 +695,7 @@ async function startRemoteViewServer(
   });
 
   try {
-    await remoteServer.start(port);
+    await remoteServer.start(port, bindAddress);
   } catch (error) {
     remoteServer = null;
     vscode.window.showErrorMessage(
@@ -687,7 +727,7 @@ async function startRemoteViewServer(
   const qrSvg = await QRCode.toString(url, { type: "svg" });
 
   if (remoteWebviewProvider) {
-    remoteWebviewProvider.setRunning(qrSvg, url);
+    remoteWebviewProvider.setRunning(qrSvg, url, password);
   }
 
   // タブ情報の初期送信のみ（リスナーはactivate内で1回だけ登録済み）

@@ -111,8 +111,18 @@
         },
         "editorSpotlighter.remoteView.password": {
           "type": "string",
-          "default": "Hmx-12Multi",
-          "description": "Password for remote view access"
+          "default": "",
+          "description": "リモートビューの接続パスワード。空のままにすると起動ごとに高エントロピーのワンタイムパスワードを自動生成し、サイドバーに表示します（推奨）。固定値を設定すると常にその値を使います"
+        },
+        "editorSpotlighter.remoteView.allowRemoteInput": {
+          "type": "boolean",
+          "default": true,
+          "description": "リモート（スマホ）からのキーボード入力・クリック・タブ切替を許可します。閲覧専用にしたい場合はオフにしてください"
+        },
+        "editorSpotlighter.remoteView.bindAddress": {
+          "type": "string",
+          "default": "0.0.0.0",
+          "description": "リモートビューサーバの待受アドレス。既定はLAN（スマホ直結）。Cloudflare Tunnel専用で使う場合は 127.0.0.1 にするとLANに露出しません"
         }
       }
     },

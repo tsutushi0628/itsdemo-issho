@@ -10,11 +10,24 @@ import { detectPanelBoundaries, PanelBoundaries } from "./panelDetector";
 import { getVSCodeWindowId, getWindowBoundsSync, WindowBounds } from "../windowDetector";
 import net from "net";
 
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // セッション有効期限（12時間）
+const LOGIN_MAX_FAILS = 5;                  // 同一IPの連続失敗許容回数
+const LOGIN_LOCKOUT_MS = 5 * 60 * 1000;     // 失敗超過時のロックアウト（5分）
+const MAX_TYPE_LENGTH = 2000;               // リモート入力テキストの最大長
+
 export class RemoteViewServer {
   private httpServer: http.Server | null = null;
   private wss: WebSocketServer | null = null;
   private password: string;
-  private sessions: Set<string> = new Set();
+  private allowInput: boolean;
+  // session token -> 失効エポックms。Set ではなく期限付き Map にして無期限滞留を防ぐ。
+  private sessions: Map<string, number> = new Map();
+  // 接続元IP -> ログイン失敗の {回数, 直近失敗時刻}。総当たりをロックアウトで抑止。
+  private loginFails: Map<string, { count: number; last: number }> = new Map();
+  // 開いている各WS接続 -> その接続のセッショントークン。失効後に接続を閉じるため。
+  private clientSessions: Map<WebSocket, string> = new Map();
+  // 失効セッション・古い失敗記録・期限切れ接続を定期的に掃除するタイマー。
+  private maintenanceTimer: ReturnType<typeof setInterval> | null = null;
   private windowId: string | null = null;
   private capturing = false;
   private screenWidth = 780;
@@ -26,8 +39,71 @@ export class RemoteViewServer {
   private connectCallback: (() => void) | null = null;
   private disconnectCallback: (() => void) | null = null;
 
-  constructor(password: string, _projectPath: string) {
+  constructor(password: string, _projectPath: string, allowInput: boolean = true) {
     this.password = password;
+    this.allowInput = allowInput;
+  }
+
+  // 接続元IPを正規化して取得（IPv4-mapped IPv6 を素のIPv4に）。
+  private clientIp(req: http.IncomingMessage): string {
+    const raw = req.socket.remoteAddress ?? (req.connection as net.Socket).remoteAddress ?? "";
+    return raw.replace(/^::ffff:/, "");
+  }
+
+  // 失効済みセッションを掃除する。
+  private pruneSessions(now: number): void {
+    for (const [token, exp] of this.sessions) {
+      if (exp <= now) {
+        this.sessions.delete(token);
+      }
+    }
+  }
+
+  // ロックアウト窓を過ぎたログイン失敗記録を掃除する（Map の無制限増加=メモリ枯渇を防ぐ）。
+  private pruneLoginFails(now: number): void {
+    for (const [ip, info] of this.loginFails) {
+      if (now - info.last >= LOGIN_LOCKOUT_MS) {
+        this.loginFails.delete(ip);
+      }
+    }
+  }
+
+  // セッションが失効した開きっぱなしのWS接続を閉じる（確立時だけでなく継続中も失効を反映）。
+  private closeExpiredClients(): void {
+    for (const [client, token] of this.clientSessions) {
+      if (!this.hasValidSession(token)) {
+        this.clientSessions.delete(client);
+        try { client.close(4001, "Session expired"); } catch { /* noop */ }
+      }
+    }
+  }
+
+  // 配信先として有効か（OPEN かつセッション有効）。失効した接続には画面フレーム等を一切送らない。
+  private canSendTo(client: WebSocket): boolean {
+    return (
+      client.readyState === WebSocket.OPEN &&
+      this.hasValidSession(this.clientSessions.get(client) ?? null)
+    );
+  }
+
+  private hasValidSession(token: string | null): boolean {
+    if (!token) return false;
+    const exp = this.sessions.get(token);
+    if (exp === undefined) return false;
+    if (exp <= Date.now()) {
+      this.sessions.delete(token);
+      return false;
+    }
+    return true;
+  }
+
+  // 接続が https 経由か（プロトコルヒント用途のみ。アクセス制御には使わない）。
+  private isHttps(req: http.IncomingMessage): boolean {
+    const visitor = req.headers["cf-visitor"];
+    return (
+      req.headers["x-forwarded-proto"] === "https" ||
+      (typeof visitor === "string" && visitor.includes('"scheme":"https"'))
+    );
   }
 
   setTabInfo(tabs: TabInfo[]): void {
@@ -42,7 +118,7 @@ export class RemoteViewServer {
     const msg: ServerMessage = { type: "tabs", data: this.currentTabs };
     const payload = JSON.stringify(msg);
     for (const client of this.wss.clients) {
-      if (client.readyState === WebSocket.OPEN) {
+      if (this.canSendTo(client)) {
         client.send(payload);
       }
     }
@@ -62,7 +138,7 @@ export class RemoteViewServer {
     const msg: ServerMessage = { type: "columns", count: this.columnCount, active: this.selectedColumn };
     const payload = JSON.stringify(msg);
     for (const client of this.wss.clients) {
-      if (client.readyState === WebSocket.OPEN) client.send(payload);
+      if (this.canSendTo(client)) client.send(payload);
     }
   }
 
@@ -74,7 +150,7 @@ export class RemoteViewServer {
     this.disconnectCallback = callback;
   }
 
-  async start(port: number): Promise<void> {
+  async start(port: number, host: string = "0.0.0.0"): Promise<void> {
     this.httpServer = http.createServer((req, res) => {
       this.handleHttpRequest(req, res);
     });
@@ -90,7 +166,17 @@ export class RemoteViewServer {
         reject(new Error("HTTP server not initialized"));
         return;
       }
-      this.httpServer.listen(port, () => {
+      // bind 先を明示。既定は LAN（スマホ直結用）。トンネル専用なら "127.0.0.1" を渡せる。
+      this.httpServer.listen(port, host, () => {
+        // listen 成功時だけ掃除タイマーを起動（listen 失敗で reject した際のタイマー残留を防ぐ）。
+        if (!this.maintenanceTimer) {
+          this.maintenanceTimer = setInterval(() => {
+            const now = Date.now();
+            this.pruneSessions(now);
+            this.pruneLoginFails(now);
+            this.closeExpiredClients();
+          }, 60 * 1000);
+        }
         resolve();
       });
       this.httpServer.on("error", (error) => {
@@ -101,6 +187,12 @@ export class RemoteViewServer {
 
   async stop(): Promise<void> {
     this.stopCapture();
+
+    if (this.maintenanceTimer) {
+      clearInterval(this.maintenanceTimer);
+      this.maintenanceTimer = null;
+    }
+    this.clientSessions.clear();
 
     if (this.wss) {
       for (const client of this.wss.clients) {
@@ -159,7 +251,8 @@ export class RemoteViewServer {
         const msg: ServerMessage = { type: "frame", data: "data:image/jpeg;base64," + base64 };
         const payload = JSON.stringify(msg);
         for (const client of this.wss!.clients) {
-          if (client.readyState === WebSocket.OPEN) client.send(payload);
+          // 失効した接続には編集画面のフレームを送らない（受動的な画面流出を防ぐ）。
+          if (this.canSendTo(client)) client.send(payload);
         }
       }
     } catch {
@@ -221,20 +314,53 @@ mouseUp?.post(tap: .cghidEventTap)
 
     // POST /login — パスワード認証
     if (req.method === "POST" && requestUrl.pathname === "/login") {
+      const ip = this.clientIp(req);
+      const now = Date.now();
+
+      // 総当たり対策: 同一IPが連続失敗したらロックアウト
+      const fail = this.loginFails.get(ip);
+      if (fail && fail.count >= LOGIN_MAX_FAILS && now - fail.last < LOGIN_LOCKOUT_MS) {
+        res.writeHead(429, {
+          "Content-Type": "text/plain",
+          "Retry-After": String(Math.ceil(LOGIN_LOCKOUT_MS / 1000)),
+        });
+        res.end("Too Many Requests");
+        return;
+      }
+
       let body = "";
-      req.on("data", (chunk) => { body += chunk; });
+      let aborted = false;
+      req.on("data", (chunk) => {
+        if (aborted) return;
+        body += chunk;
+        // 認証本文に上限。無制限蓄積によるメモリ枯渇DoSを防ぐ。
+        if (body.length > 4096) {
+          aborted = true;
+          res.writeHead(413, { "Content-Type": "text/plain" });
+          res.end("Payload Too Large");
+          req.destroy();
+        }
+      });
       req.on("end", () => {
+        if (aborted) return;
         const params = new URLSearchParams(body);
         const pw = params.get("password") || "";
         if (validatePassword(pw, this.password)) {
+          this.loginFails.delete(ip);
+          const t = Date.now();
+          this.pruneSessions(t);
           const session = generateSessionToken();
-          this.sessions.add(session);
+          this.sessions.set(session, t + SESSION_TTL_MS);
+          const secure = this.isHttps(req) ? " Secure;" : "";
           res.writeHead(302, {
-            "Set-Cookie": `session=${session}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${30 * 24 * 60 * 60}`,
-            "Location": "/"
+            "Set-Cookie": `session=${session}; Path=/; HttpOnly;${secure} SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`,
+            "Location": "/",
           });
           res.end();
         } else {
+          const prev = this.loginFails.get(ip);
+          const recent = prev && now - prev.last < LOGIN_LOCKOUT_MS ? prev.count : 0;
+          this.loginFails.set(ip, { count: recent + 1, last: now });
           res.writeHead(302, { "Location": "/login?error=1" });
           res.end();
         }
@@ -253,16 +379,13 @@ mouseUp?.post(tap: .cghidEventTap)
     // GET / — セッション検証
     if (requestUrl.pathname === "/" || requestUrl.pathname === "") {
       const sessionToken = this.getSessionFromCookie(req);
-      if (!sessionToken || !this.sessions.has(sessionToken)) {
+      if (!this.hasValidSession(sessionToken)) {
         res.writeHead(302, { "Location": "/login" });
         res.end();
         return;
       }
-      const isHttps = req.headers["x-forwarded-proto"] === "https" || req.headers["cf-visitor"]?.includes('"scheme":"https"');
-      const wsProtocol = isHttps ? "wss" : "ws";
-      const host = req.headers.host ?? "localhost";
-      const wsUrl = `${wsProtocol}://${host}/ws`;
-      const html = getMobileHtml(wsUrl);
+      // WS URL はクライアント側で location から組むため Host ヘッダを埋め込まない。
+      const html = getMobileHtml();
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(html);
       return;
@@ -282,10 +405,12 @@ mouseUp?.post(tap: .cghidEventTap)
     }
 
     const sessionToken = this.getSessionFromCookie(req);
-    if (!sessionToken || !this.sessions.has(sessionToken)) {
+    if (!this.hasValidSession(sessionToken)) {
       ws.close(4001, "Unauthorized");
       return;
     }
+    // この接続のセッションを記録（失効時にこの接続を閉じるため）。
+    this.clientSessions.set(ws, sessionToken as string);
 
     // 最初のクライアント接続でキャプチャ開始＋コールバック呼び出し
     const wasFirstClient = this.wss!.clients.size === 1;
@@ -313,10 +438,36 @@ mouseUp?.post(tap: .cghidEventTap)
         return;
       }
 
+      // どのメッセージでも毎回セッション有効性を再確認（確立後に失効していたら即閉じる）。
+      // selectColumn 経由の画面キャプチャ誘発や disconnect の悪用も含めて締め出す。
+      {
+        const tok = this.clientSessions.get(ws) ?? null;
+        if (!this.hasValidSession(tok)) {
+          this.clientSessions.delete(ws);
+          ws.close(4001, "Session expired");
+          return;
+        }
+      }
+
       if (message.type === "click") {
-        this.handleClick(message.x, message.y);
+        // 画面クリックはホストへの入力。許可フラグと座標域（0-1）を検証してから実行。
+        if (!this.allowInput) return;
+        const { x, y } = message;
+        if (
+          typeof x !== "number" || typeof y !== "number" ||
+          !isFinite(x) || !isFinite(y) ||
+          x < 0 || x > 1 || y < 0 || y > 1
+        ) {
+          return;
+        }
+        this.handleClick(x, y);
       } else if (message.type === "selectColumn") {
-        this.selectedColumn = message.column;
+        // カラム選択は画面ナビのみ（ホスト入力ではない）。範囲を検証。
+        const c = message.column;
+        if (typeof c !== "number" || !Number.isInteger(c) || c < 0 || c >= this.columnCount) {
+          return;
+        }
+        this.selectedColumn = c;
         this.broadcastColumns();
         this.captureOnce();
       } else if (message.type === "disconnect") {
@@ -329,8 +480,21 @@ mouseUp?.post(tap: .cghidEventTap)
           this.disconnectCallback();
         }
       } else if (message.type === "screenInfo") {
-        this.screenWidth = message.width || 780;
-      } else if (message.type === "type" || message.type === "switchTab") {
+        // 攻撃者制御の幅を sharp.resize に渡すとメモリ枯渇DoS。妥当域にクランプ。
+        const w = message.width;
+        this.screenWidth =
+          typeof w === "number" && isFinite(w) && w >= 100 && w <= 4000 ? Math.round(w) : 780;
+      } else if (message.type === "type") {
+        // リモート入力。許可フラグと型・長さを検証してから転送。
+        if (!this.allowInput) return;
+        if (typeof message.text !== "string" || message.text.length === 0 || message.text.length > MAX_TYPE_LENGTH) {
+          return;
+        }
+        if (this.messageCallback) {
+          this.messageCallback(message);
+        }
+      } else if (message.type === "switchTab") {
+        if (!this.allowInput) return;
         if (this.messageCallback) {
           this.messageCallback(message);
         }
@@ -338,6 +502,7 @@ mouseUp?.post(tap: .cghidEventTap)
     });
 
     ws.on("close", () => {
+      this.clientSessions.delete(ws);
       // 全クライアント切断時にキャプチャ停止＋コールバック呼び出し
       if (this.wss && this.wss.clients.size === 0) {
         this.stopCapture();
@@ -349,18 +514,14 @@ mouseUp?.post(tap: .cghidEventTap)
   }
 
   private isAllowedAccess(req: http.IncomingMessage): boolean {
-    // Cloudflare Tunnel経由のアクセスを許可
-    if (req.headers["cf-connecting-ip"] || req.headers["cf-ray"]) {
-      return true;
-    }
-
-    const remoteAddress =
-      req.socket.remoteAddress ?? (req.connection as net.Socket).remoteAddress;
-    if (!remoteAddress) {
+    // 許可判定は「実際の接続元ソケットIP」だけで行う。攻撃者が任意に付けられる
+    // cf-connecting-ip / cf-ray 等のヘッダは信用しない（なりすましで許可リストを
+    // 突破されるため）。Cloudflare Tunnel 利用時も cloudflared は localhost から
+    // 接続するため、下の 127.0.0.1 / ::1 許可で正しく通る。
+    const addr = this.clientIp(req);
+    if (!addr) {
       return false;
     }
-
-    const addr = remoteAddress.replace(/^::ffff:/, "");
 
     if (addr === "127.0.0.1" || addr === "::1" || addr === "localhost") {
       return true;

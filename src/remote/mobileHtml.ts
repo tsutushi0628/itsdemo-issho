@@ -1,4 +1,4 @@
-export function getMobileHtml(wsUrl: string): string {
+export function getMobileHtml(): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -223,7 +223,10 @@ export function getMobileHtml(wsUrl: string): string {
   }
 
   function connect() {
-    ws = new WebSocket('${wsUrl}');
+    // WS URL はサーバ側で Host ヘッダを埋め込まず、ブラウザの location から組む
+    // （攻撃者制御の Host ヘッダによる反射XSSを構造的に排除）。
+    var wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+    ws = new WebSocket(wsUrl);
 
     ws.onopen = function() {
       reconnectBanner.classList.remove('visible');
