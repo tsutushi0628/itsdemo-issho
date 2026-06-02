@@ -32,11 +32,11 @@ export function calculateLayout(
     return { orientation: 0, groups };
   }
 
-  const VSCODE_MIN_GROUP_WIDTH = 220;
+  const VSCODE_MIN_GROUP_WIDTH = 230;
   const activeCount = activeIndices.size;
   const inactiveCount = totalColumns - activeCount;
 
-  // 非アクティブを220px固定、残りをアクティブで均等割り
+  // 非アクティブを230px固定、残りをアクティブで均等割り
   const inactiveSize = VSCODE_MIN_GROUP_WIDTH / windowWidth;
   const activeSize = inactiveCount > 0
     ? (1 - inactiveCount * inactiveSize) / activeCount

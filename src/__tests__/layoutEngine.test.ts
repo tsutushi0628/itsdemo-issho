@@ -10,7 +10,7 @@ import { calculateLayout } from "../layoutEngine";
 import type { LayoutConfig } from "../layoutEngine";
 import { computeActiveColumns } from "../columnCalculator";
 
-const VSCODE_MIN = 220;
+const VSCODE_MIN = 230;
 
 describe("calculateLayout", () => {
   it("activeIndices.size >= totalColumns のとき等間隔になる", () => {

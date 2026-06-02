@@ -11,7 +11,7 @@ export function computeActiveColumns(
   minColumnWidth: number,
   totalColumns: number,
   fullWidthThreshold: number,
-  inactiveFixedWidth: number = 220
+  inactiveFixedWidth: number = 230
 ): number {
   if (editorWidth >= fullWidthThreshold) {
     return totalColumns;
