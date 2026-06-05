@@ -6,15 +6,15 @@ describe("decideSidebarTargetState", () => {
     expect(decideSidebarTargetState(0)).toBe("close");
   });
 
-  it("アクティブカラム1は非表示", () => {
+  it("アクティブカラム1は非表示（境界・閉じる側）", () => {
     expect(decideSidebarTargetState(1)).toBe("close");
   });
 
-  it("アクティブカラム2は非表示（境界・閉じる側）", () => {
-    expect(decideSidebarTargetState(2)).toBe("close");
+  it("アクティブカラム2は表示（境界・開く側／サイドバー開でアクティブ2本運用）", () => {
+    expect(decideSidebarTargetState(2)).toBe("open");
   });
 
-  it("アクティブカラム3は表示（境界・開く側）", () => {
+  it("アクティブカラム3は表示", () => {
     expect(decideSidebarTargetState(3)).toBe("open");
   });
 

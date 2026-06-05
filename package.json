@@ -70,9 +70,21 @@
         },
         "editorSpotlighter.minColumnWidth": {
           "type": "number",
-          "default": 600,
+          "default": 460,
           "minimum": 100,
-          "description": "アクティブ枠の最小許容幅（px）。エディタ領域幅とこの値からアクティブカラム数を自動決定します"
+          "description": "アクティブ枠の最小許容幅（px）。エディタ領域幅とこの値からアクティブカラム数を自動決定します。サイドバーを開いたまま2カラムをアクティブにするには、編集領域（ウィンドウ幅−サイドバー幅−枠）に2枠＋覗き列が収まる値にします"
+        },
+        "editorSpotlighter.sidebarWidthWhenOpen": {
+          "type": "number",
+          "default": 230,
+          "minimum": 0,
+          "description": "プライマリサイドバーが開いているときに編集領域から差し引く幅（px）。実機のサイドバー幅に合わせて調整します。実値より大きめにすると列が崩れにくく、小さすぎると非アクティブ列が最小幅を割って崩れます"
+        },
+        "editorSpotlighter.maxActiveColumns": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "description": "同時にアクティブにする列数の上限。ウィンドウを広げてもこの本数を超えてアクティブ化しません（0で上限なし）。最小許容幅だけでは広い画面で本数が増えるため、上限で頭を抑えます。fullWidthThreshold以上の等間隔表示には適用されません"
         },
         "editorSpotlighter.fullWidthThreshold": {
           "type": "number",

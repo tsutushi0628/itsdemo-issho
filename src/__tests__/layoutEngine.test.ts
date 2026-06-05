@@ -8,9 +8,11 @@ vi.mock("vscode", () => ({
 
 import { calculateLayout } from "../layoutEngine";
 import type { LayoutConfig } from "../layoutEngine";
-import { computeActiveColumns } from "../columnCalculator";
+import { computeActiveColumns, deriveEditorWidth } from "../columnCalculator";
 
 const VSCODE_MIN = 230;
+// VS Code がエディタ群に強制する絶対最小幅。これを割るとレイアウトが崩れる。
+const VSCODE_HARD_FLOOR = 220;
 
 describe("calculateLayout", () => {
   it("activeIndices.size >= totalColumns のとき等間隔になる", () => {
@@ -235,6 +237,73 @@ describe("27インチ運用 業務意図シナリオ", () => {
     expect(activeWidthPx).toBeGreaterThanOrEqual(MIN_ACTIVE_WIDTH);
     expect(n).toBeGreaterThanOrEqual(1);
     expect(n).toBeLessThanOrEqual(TOTAL_COLUMNS);
+  });
+
+  it("シナリオD: 27インチ実測1920px・サイドバー開230pxで、アクティブ2本かつ非アクティブ列が崩れない（4カラム目選択でも潰れない）", () => {
+    // 実機の窓幅。サイドバー開（230px）＋アクティビティバー等（60px）を差し引いた編集領域で比率を作る。
+    const windowWidth = 1920;
+    const sidebarWidth = 230;
+    const chromeMargin = 60;
+    const minActiveWidth = 460; // 既定値。1920px・サイドバー開で2本を成立させる基準
+
+    const editorWidth = deriveEditorWidth(windowWidth, sidebarWidth, chromeMargin); // 1630
+    const n = computeActiveColumns(editorWidth, minActiveWidth, TOTAL_COLUMNS, FULL_WIDTH_THRESHOLD);
+
+    // 要求2: 2カラムがアクティブになる
+    expect(n).toBe(2);
+
+    // 要求3: どのアクティブ列の組み合わせでも、非アクティブ列が VS Code の最小幅220pxを割らない。
+    // 「4カラム目（index=3）を選ぶと崩れる」事象は、選択列を含むあらゆる活性集合で再現しうるため
+    // 全パターンを検証する。比率は同一の editorWidth で作り、同一の editorWidth へ適用する。
+    const config: LayoutConfig = { totalColumns: TOTAL_COLUMNS, windowWidth: editorWidth, minColumnWidth: minActiveWidth };
+    const indexPairs: Array<[number, number]> = [
+      [0, 3], // 4カラム目を含む組み合わせ（報告された崩れケース）
+      [2, 3],
+      [3, 4],
+      [0, 1],
+      [1, 2],
+    ];
+    for (const pair of indexPairs) {
+      const layout = calculateLayout(config, new Set(pair));
+      layout.groups.forEach((g, i) => {
+        const px = g.size * editorWidth;
+        if (pair.includes(i)) {
+          expect(px).toBeGreaterThanOrEqual(minActiveWidth); // アクティブ列は最小許容幅以上
+        } else {
+          expect(px).toBeGreaterThanOrEqual(VSCODE_HARD_FLOOR); // 非アクティブ列も絶対最小を割らない
+        }
+      });
+      const total = layout.groups.reduce((s, g) => s + g.size, 0);
+      expect(total).toBeCloseTo(1.0);
+    }
+  });
+
+  it("シナリオE: BenQ最大化2560px・サイドバー開・上限2で、2本のまま広い列になり崩れない", () => {
+    // 窓を2560pxに広げてもアクティブは2本に頭打ち。各列は広くなるだけで崩れない。
+    const windowWidth = 2560;
+    const sidebarWidth = 230;
+    const chromeMargin = 60;
+    const minActiveWidth = 460;
+    const maxActive = 2;
+
+    const editorWidth = deriveEditorWidth(windowWidth, sidebarWidth, chromeMargin); // 2270
+    const n = computeActiveColumns(editorWidth, minActiveWidth, TOTAL_COLUMNS, FULL_WIDTH_THRESHOLD, maxActive);
+
+    // 上限により2本に抑えられる（上限なしなら4本）
+    expect(n).toBe(2);
+
+    const config: LayoutConfig = { totalColumns: TOTAL_COLUMNS, windowWidth: editorWidth, minColumnWidth: minActiveWidth };
+    const layout = calculateLayout(config, new Set([0, 3])); // 4カラム目を含む
+    layout.groups.forEach((g, i) => {
+      const px = g.size * editorWidth;
+      if (i === 0 || i === 3) {
+        expect(px).toBeGreaterThanOrEqual(minActiveWidth); // アクティブ列は広い（約790px）
+      } else {
+        expect(px).toBeGreaterThanOrEqual(VSCODE_HARD_FLOOR); // 非アクティブも崩れない
+      }
+    });
+    const total = layout.groups.reduce((s, g) => s + g.size, 0);
+    expect(total).toBeCloseTo(1.0);
   });
 
   it("シナリオC: ウルトラワイド（editorWidth=3140）で等間隔モードになり各幅600px以上", () => {

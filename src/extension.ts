@@ -3,7 +3,7 @@ import * as os from "os";
 import { exec } from "child_process";
 import QRCode from "qrcode";
 import { detectWindowWidth } from "./windowDetector";
-import { computeActiveColumns } from "./columnCalculator";
+import { computeActiveColumns, deriveEditorWidth } from "./columnCalculator";
 import { calculateLayout, applyLayout, LayoutConfig } from "./layoutEngine";
 import { decideSidebarTargetState, SidebarTargetState } from "./sidebarPolicy";
 import { TabTreeProvider } from "./tabTreeProvider";
@@ -25,19 +25,22 @@ let activeHistory: number[] = [];
 let applyingLayout = false;
 let lastLayoutSignature: string | undefined;
 let lastSidebarAutoTarget: SidebarTargetState | undefined;
-const SIDEBAR_OPEN_WIDTH = 300;
+// プライマリサイドバーが開いているときに編集領域から差し引く幅。
+// 実機（27インチ・1920px）でユーザーが常用するサイドバー幅の実測値。設定で上書き可能。
+let sidebarWidthWhenOpen = 230;
 // VS Code はエディタ群の最小幅を 220px でハードコードしている（設定不可）。
-// 幅検出は OS ウィンドウ全幅を返すが、実際のエディタ格子はスクロールバー・群間の
-// 仕切り・枠の分だけ狭い。全幅で比率を作ると、VS Code がその比率を実領域へ
-// スケールした際に非アクティブ列が 220px を割り、VS Code 側がクランプして
-// レイアウトが指定通りにならない。実領域を必ず下回るよう保守的に差し引く安全マージン。
-const EDITOR_CHROME_MARGIN = 30;
+// 幅検出は OS ウィンドウ全幅を返すが、実際のエディタ格子はアクティビティバー（約48px）・
+// 群間の仕切り・スクロールバーの分だけ狭い。全幅で比率を作ると、VS Code がその比率を
+// 実領域へスケールした際に非アクティブ列が 220px を割り、VS Code 側がクランプして
+// レイアウトが崩れる（選んだ列しか表示されない）。アクティビティバー＋仕切りを覆い、
+// 実領域を必ず下回るよう保守的に差し引く安全マージン。
+const EDITOR_CHROME_MARGIN = 60;
 
 function getEffectiveSidebarWidth(): number {
   if (lastSidebarAutoTarget === "close") {
     return 0;
   }
-  return SIDEBAR_OPEN_WIDTH;
+  return sidebarWidthWhenOpen;
 }
 
 async function syncSidebarToActiveColumns(activeColumns: number): Promise<void> {
@@ -71,11 +74,15 @@ async function recalculateActiveColumns(
   totalColumns: number,
   minColumnWidth: number,
   fullWidthThreshold: number,
-  effectiveSidebarWidth: number = 0
+  maxActiveColumns: number
 ): Promise<WindowInfo> {
   const windowWidth = await detectWindowWidth();
-  const editorWidth = Math.max(1, windowWidth - effectiveSidebarWidth - EDITOR_CHROME_MARGIN);
-  const activeColumns = computeActiveColumns(editorWidth, minColumnWidth, totalColumns, fullWidthThreshold);
+  // アクティブ本数の判定は「サイドバーは開いている」固定前提で行う。
+  // 実サイドバー状態（開↔閉）を判定の入力にすると、サイドバーの開閉自体が本数を
+  // 変え、その本数がまたサイドバーの開閉を呼ぶ循環で、中間帯のウィンドウ幅では
+  // レイアウトが振動する。判定を固定前提に切り離して循環を断つ。
+  const editorWidth = deriveEditorWidth(windowWidth, sidebarWidthWhenOpen, EDITOR_CHROME_MARGIN);
+  const activeColumns = computeActiveColumns(editorWidth, minColumnWidth, totalColumns, fullWidthThreshold, maxActiveColumns);
   return { activeColumns, windowWidth };
 }
 
@@ -114,14 +121,16 @@ export async function activate(
   await applyTabSettings(config);
 
   let totalColumns = config.get<number>("totalColumns", 5);
-  let minColumnWidth = config.get<number>("minColumnWidth", 600);
+  let minColumnWidth = config.get<number>("minColumnWidth", 460);
   let fullWidthThreshold = config.get<number>("fullWidthThreshold", 3000);
+  let maxActiveColumns = config.get<number>("maxActiveColumns", 2);
+  sidebarWidthWhenOpen = config.get<number>("sidebarWidthWhenOpen", 230);
 
   let activeColumns: number;
   let windowWidth: number;
 
   try {
-    const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold, getEffectiveSidebarWidth());
+    const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold, maxActiveColumns);
     activeColumns = info.activeColumns;
     windowWidth = info.windowWidth;
   } catch (error) {
@@ -132,14 +141,14 @@ export async function activate(
     );
   }
 
-  log(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}, windowWidth=${windowWidth}, sidebarOpenWidth=${SIDEBAR_OPEN_WIDTH}`);
+  log(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}, windowWidth=${windowWidth}, sidebarOpenWidth=${sidebarWidthWhenOpen}`);
 
   await syncSidebarToActiveColumns(activeColumns);
 
   // ウィンドウ幅の再取得（整形ボタン or 初回のみ）
   const refreshWindowWidth = async () => {
     try {
-      const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold, getEffectiveSidebarWidth());
+      const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold, maxActiveColumns);
       activeColumns = info.activeColumns;
       windowWidth = info.windowWidth;
       log(`[width-refresh] activeColumns=${activeColumns}, windowWidth=${windowWidth}`);
@@ -177,7 +186,7 @@ export async function activate(
       }
       // ウィンドウ幅を再取得してactiveColumnsを更新
       try {
-        const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold, getEffectiveSidebarWidth());
+        const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold, maxActiveColumns);
         activeColumns = info.activeColumns;
         windowWidth = info.windowWidth;
       } catch {
@@ -208,7 +217,7 @@ export async function activate(
 
       // アコーディオン適用（常にtotalColumnsを使う）
       const effectiveSidebarWidth = getEffectiveSidebarWidth();
-      const editorWidth = Math.max(1, windowWidth - effectiveSidebarWidth - EDITOR_CHROME_MARGIN);
+      const editorWidth = deriveEditorWidth(windowWidth, effectiveSidebarWidth, EDITOR_CHROME_MARGIN);
       const layoutConfig: LayoutConfig = {
         totalColumns,
         windowWidth: editorWidth,  // エディタ領域の幅
@@ -509,8 +518,10 @@ export async function activate(
       const updated = vscode.workspace.getConfiguration("editorSpotlighter");
       enabled = updated.get<boolean>("enabled", true);
       totalColumns = updated.get<number>("totalColumns", 5);
-      minColumnWidth = updated.get<number>("minColumnWidth", 600);
+      minColumnWidth = updated.get<number>("minColumnWidth", 460);
       fullWidthThreshold = updated.get<number>("fullWidthThreshold", 3000);
+      maxActiveColumns = updated.get<number>("maxActiveColumns", 2);
+      sidebarWidthWhenOpen = updated.get<number>("sidebarWidthWhenOpen", 230);
 
       if (remoteServer && mobileConnected) {
         remoteServer.setColumnCount(totalColumns);
