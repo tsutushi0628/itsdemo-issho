@@ -5,12 +5,36 @@ import { exec } from "child_process";
 import sharp from "sharp";
 import { validatePassword, generateSessionToken } from "./tokenAuth";
 import { getMobileHtml, getLoginHtml } from "./mobileHtml";
-import { ClientMessage, ServerMessage, TabInfo } from "./protocol";
+import { ClientMessage, ServerMessage, TabInfo, InjectAbortReason } from "./protocol";
 import { detectPanelBoundaries, PanelBoundaries } from "./panelDetector";
 import { getVSCodeWindowId, getWindowBoundsSync, WindowBounds } from "../windowDetector";
+import { DEFAULT_BIND_ADDRESS } from "./qrPolicy";
 import net from "net";
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // セッション有効期限（12時間）
+
+/**
+ * 選択列が実列数の範囲外になった場合に末尾列へ寄せる純関数（エッジケース5）。
+ * count が 0 の場合は 0 を返す。
+ */
+export function clampSelectedColumn(selected: number, count: number): number {
+  if (count <= 0) return 0;
+  if (selected >= count) return count - 1;
+  return selected;
+}
+
+/**
+ * TabInfo 配列と列数から各グループのアクティブタブ名を導出する純関数（要件 b-2）。
+ * アクティブタブが無いグループは空文字。count 超過分の切り捨て、不足分は空文字で埋める。
+ */
+export function deriveColumnLabels(tabs: TabInfo[], count: number): string[] {
+  const labels: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const activeTab = tabs.find((t) => t.groupIndex === i && t.isActive);
+    labels.push(activeTab ? activeTab.label : "");
+  }
+  return labels;
+}
 const LOGIN_MAX_FAILS = 5;                  // 同一IPの連続失敗許容回数
 const LOGIN_LOCKOUT_MS = 5 * 60 * 1000;     // 失敗超過時のロックアウト（5分）
 const MAX_TYPE_LENGTH = 2000;               // リモート入力テキストの最大長
@@ -34,7 +58,9 @@ export class RemoteViewServer {
   private messageCallback: ((msg: ClientMessage) => void) | null = null;
   private currentTabs: TabInfo[] = [];
   private selectedColumn = 0;
-  private columnCount = 4;
+  private columnCount = 0;
+  private columnLabels: string[] = [];
+  private lastColumnPayload: string = "";  // setColumns の重複ブロードキャスト抑止（B-9）
   private panelCache: PanelBoundaries | null = null;
   private connectCallback: (() => void) | null = null;
   private disconnectCallback: (() => void) | null = null;
@@ -128,17 +154,61 @@ export class RemoteViewServer {
     this.messageCallback = callback;
   }
 
-  setColumnCount(count: number): void {
-    this.columnCount = count;
-    this.broadcastColumns();
+  getSelectedColumn(): number {
+    return this.selectedColumn;
   }
 
-  private broadcastColumns(): void {
+  /**
+   * 実グループ数ベースで列数とラベルを更新し、選択列をクランプしてブロードキャスト。
+   * 既存の setColumnCount を置換（design 2.4, 3.3）。
+   */
+  setColumns(count: number, labels: string[]): void {
+    this.columnCount = count;
+    this.columnLabels = labels;
+    this.selectedColumn = clampSelectedColumn(this.selectedColumn, count);
+    // 前回送信ペイロードと同一なら省略（selectColumn 経由の broadcastColumns は無条件維持・ACK契約）
+    const payload = this.buildColumnsPayload();
+    if (payload === this.lastColumnPayload) return;
+    this.lastColumnPayload = payload;
+    this.broadcastColumnsWithPayload(payload);
+  }
+
+  sendInjectResult(result: { ok: boolean; reason?: InjectAbortReason; column: number }): void {
     if (!this.wss || this.wss.clients.size === 0) return;
-    const msg: ServerMessage = { type: "columns", count: this.columnCount, active: this.selectedColumn };
+    const msg: ServerMessage = { type: "injectResult", ...result };
     const payload = JSON.stringify(msg);
     for (const client of this.wss.clients) {
       if (this.canSendTo(client)) client.send(payload);
+    }
+  }
+
+  /** テスト可能にするため package-internal export。現在の columns 状態を JSON 文字列で返す。 */
+  buildColumnsPayload(): string {
+    const msg: ServerMessage = {
+      type: "columns",
+      count: this.columnCount,
+      active: this.selectedColumn,
+      labels: this.columnLabels,
+      allowInput: this.allowInput,
+    };
+    return JSON.stringify(msg);
+  }
+
+  private broadcastColumnsWithPayload(payload: string): void {
+    if (!this.wss || this.wss.clients.size === 0) return;
+    for (const client of this.wss.clients) {
+      if (this.canSendTo(client)) client.send(payload);
+    }
+  }
+
+  private broadcastColumns(): void {
+    this.broadcastColumnsWithPayload(this.buildColumnsPayload());
+  }
+
+  /** 特定の接続1本へ現在の columns 状態を送る（再同期用）。 */
+  sendColumnsTo(ws: WebSocket): void {
+    if (this.canSendTo(ws)) {
+      ws.send(this.buildColumnsPayload());
     }
   }
 
@@ -150,7 +220,7 @@ export class RemoteViewServer {
     this.disconnectCallback = callback;
   }
 
-  async start(port: number, host: string = "0.0.0.0"): Promise<void> {
+  async start(port: number, host: string = DEFAULT_BIND_ADDRESS): Promise<void> {
     this.httpServer = http.createServer((req, res) => {
       this.handleHttpRequest(req, res);
     });
@@ -166,7 +236,7 @@ export class RemoteViewServer {
         reject(new Error("HTTP server not initialized"));
         return;
       }
-      // bind 先を明示。既定は LAN（スマホ直結用）。トンネル専用なら "127.0.0.1" を渡せる。
+      // bind 先を明示。既定はローカルのみ（トンネル経由向け・安全）。LAN 直結は "0.0.0.0" を渡す。
       this.httpServer.listen(port, host, () => {
         // listen 成功時だけ掃除タイマーを起動（listen 失敗で reject した際のタイマー残留を防ぐ）。
         if (!this.maintenanceTimer) {
@@ -246,9 +316,9 @@ export class RemoteViewServer {
           .jpeg({ quality: 80 })
           .toBuffer();
 
-        // 4. Base64送信
+        // 4. Base64送信（column はクライアント側の列タグ判定に使う・B-5）
         const base64 = buf.toString("base64");
-        const msg: ServerMessage = { type: "frame", data: "data:image/jpeg;base64," + base64 };
+        const msg: ServerMessage = { type: "frame", data: "data:image/jpeg;base64," + base64, column: this.selectedColumn };
         const payload = JSON.stringify(msg);
         for (const client of this.wss!.clients) {
           // 失効した接続には編集画面のフレームを送らない（受動的な画面流出を防ぐ）。
@@ -425,9 +495,8 @@ mouseUp?.post(tap: .cghidEventTap)
       const tabMsg: ServerMessage = { type: "tabs", data: this.currentTabs };
       ws.send(JSON.stringify(tabMsg));
     }
-    // columns情報を送信
-    const colMsg: ServerMessage = { type: "columns", count: this.columnCount, active: this.selectedColumn };
-    ws.send(JSON.stringify(colMsg));
+    // columns情報を送信（再接続直後の状態同期含む・エッジケース6）
+    this.sendColumnsTo(ws);
 
     ws.on("message", (rawData) => {
       const data = rawData.toString();
@@ -463,8 +532,11 @@ mouseUp?.post(tap: .cghidEventTap)
         this.handleClick(x, y);
       } else if (message.type === "selectColumn") {
         // カラム選択は画面ナビのみ（ホスト入力ではない）。範囲を検証。
+        // 範囲外・型不正の場合も必ずその接続へ現在状態の columns を返して
+        // クライアント状態を再同期させる（design 5.2 / ACK 必須契約）。
         const c = message.column;
         if (typeof c !== "number" || !Number.isInteger(c) || c < 0 || c >= this.columnCount) {
+          this.sendColumnsTo(ws);
           return;
         }
         this.selectedColumn = c;

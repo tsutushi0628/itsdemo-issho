@@ -133,8 +133,8 @@
         },
         "editorSpotlighter.remoteView.bindAddress": {
           "type": "string",
-          "default": "0.0.0.0",
-          "description": "リモートビューサーバの待受アドレス。既定はLAN（スマホ直結）。Cloudflare Tunnel専用で使う場合は 127.0.0.1 にするとLANに露出しません"
+          "default": "127.0.0.1",
+          "description": "リモートビューサーバの待受アドレス。既定はローカルのみ（トンネル経由向け・安全）。同一LANのスマホから直結する場合は 0.0.0.0 に変更。ただし LAN 直結は平文HTTP（TLS未対応）であり、同一ネットワーク上の第三者にパスワード・セッション・画面が盗聴され得る。可能ならトンネル（HTTPS）経由を推奨"
         }
       }
     },

@@ -14,7 +14,7 @@ export class RemoteWebviewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "editorSpotlighter.remoteView";
 
   private _view?: vscode.WebviewView;
-  private _state: "stopped" | "running" = "stopped";
+  private _state: "stopped" | "running" | "localOnly" = "stopped";
   private _qrSvg: string = "";
   private _url: string = "";
   private _password: string = "";
@@ -53,6 +53,14 @@ export class RemoteWebviewProvider implements vscode.WebviewViewProvider {
     this._update();
   }
 
+  setLocalOnly(url: string, password: string): void {
+    this._state = "localOnly";
+    this._qrSvg = "";
+    this._url = url;
+    this._password = password;
+    this._update();
+  }
+
   private _update(): void {
     if (!this._view) {
       return;
@@ -79,6 +87,37 @@ export class RemoteWebviewProvider implements vscode.WebviewViewProvider {
     const vscode = acquireVsCodeApi();
     document.getElementById('startBtn').addEventListener('click', function () {
       vscode.postMessage({ command: 'start' });
+    });
+  </script>
+</body></html>`;
+    } else if (this._state === "localOnly") {
+      // 待ち受けが 127.0.0.1 でトンネル未設定のとき:
+      // 繋がらない LAN URL の QR を表示せず、設定への案内を表示する（要件 c-2）。
+      // htmlEscape はサーバ由来文字列の XSS 防止のため必ず適用する。
+      this._view.webview.html = `<!DOCTYPE html>
+<html><head>${cspMeta}<style>
+  body { font-family: var(--vscode-font-family); padding: 12px; color: var(--vscode-foreground); }
+  .notice { font-size: 12px; margin-bottom: 12px; line-height: 1.5; }
+  .url { font-size: 10px; color: var(--vscode-descriptionForeground); word-break: break-all; margin-top: 8px; margin-bottom: 12px; }
+  .pw-label { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 12px; }
+  .pw { font-size: 16px; font-weight: 700; font-family: var(--vscode-editor-font-family, monospace); letter-spacing: 1px; user-select: all; margin-top: 2px; }
+  button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; width: 100%; margin-top: 8px; }
+  button:hover { background: var(--vscode-button-hoverBackground); }
+</style></head>
+<body>
+  <div class="notice">待ち受けはこの Mac 内のみ（127.0.0.1）です。トンネル設定（remoteView.tunnelDomain）または LAN 直結（remoteView.bindAddress を 0.0.0.0）で外部から接続できます。</div>
+  <div class="url">${htmlEscape(this._url)}</div>
+  <div class="pw-label">Password (enter on phone)</div>
+  <div class="pw">${htmlEscape(this._password)}</div>
+  <button id="settingsBtn">&#9881; 設定を開く</button>
+  <button id="stopBtn">&#9724; Stop Remote</button>
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+    document.getElementById('settingsBtn').addEventListener('click', function () {
+      vscode.postMessage({ command: 'openSettings' });
+    });
+    document.getElementById('stopBtn').addEventListener('click', function () {
+      vscode.postMessage({ command: 'stop' });
     });
   </script>
 </body></html>`;

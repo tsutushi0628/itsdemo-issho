@@ -10,6 +10,10 @@ import { TabTreeProvider } from "./tabTreeProvider";
 import { RemoteViewServer } from "./remote/remoteViewServer";
 import { RemoteWebviewProvider } from "./remoteWebviewProvider";
 import { generateRemotePassword } from "./remote/tokenAuth";
+import { runInjectionPipeline, createVSCodeInjectionDeps } from "./remote/injectionPipeline";
+import { createVSCodeFocusHost, routeFocusToColumn } from "./remote/focusRouter";
+import { deriveColumnLabels } from "./remote/remoteViewServer";
+import { decideRemoteAccessDisplay, DEFAULT_BIND_ADDRESS } from "./remote/qrPolicy";
 
 // 出荷時に固定で入っていた既知パスワード。設定にこの値が残っている場合は
 // 「未設定」とみなして起動時にランダム生成へ切り替える（既知の弱い資格情報を無効化）。
@@ -448,7 +452,8 @@ export async function activate(
     log("[mobile] connected");
     mobileConnected = true;
     if (remoteServer) {
-      remoteServer.setColumnCount(totalColumns);
+      // 実グループ数ベースで列数とラベルを初期化（要件 b-2, b-3）
+      updateRemoteTabs();
       remoteServer.captureOnce();
     }
     log("[mobile] column count set");
@@ -475,13 +480,18 @@ export async function activate(
       }
     } else if (message.command === "stop") {
       await stopRemoteViewServer();
+    } else if (message.command === "openSettings") {
+      // localOnly 案内の「設定を開く」ボタン（要件 c-2）
+      await vscode.commands.executeCommand("workbench.action.openSettings", "editorSpotlighter.remoteView");
     }
   });
 
   context.subscriptions.push(
     vscode.window.tabGroups.onDidChangeTabs(() => {
       tabTreeProvider.refresh();
-      updateRemoteTabs();
+      if (mobileConnected) {
+        updateRemoteTabs();
+      }
     })
   );
 
@@ -617,7 +627,8 @@ export async function activate(
       sidebarWidthWhenOpen = updated.get<number>("sidebarWidthWhenOpen", 230);
 
       if (remoteServer && mobileConnected) {
-        remoteServer.setColumnCount(totalColumns);
+        // 設定変更時も実グループ数ベースで再同期（要件 b-3）
+        updateRemoteTabs();
       }
 
       // タブ設定が変更されたらVSCode本体設定を連動書き換え
@@ -723,8 +734,8 @@ async function startRemoteViewServer(
       : configuredPassword;
   // リモート入力（キーボード/クリック/タブ切替）の許可。閲覧専用にしたい場合は false。
   const allowRemoteInput = config.get<boolean>("remoteView.allowRemoteInput", true);
-  // bind 先。既定は LAN（スマホ直結）。トンネル専用なら "127.0.0.1" に設定可能。
-  const bindAddress = config.get<string>("remoteView.bindAddress", "0.0.0.0");
+  // bind 先。既定はローカルのみ（トンネル経由向け・安全）。LAN 直結は 0.0.0.0 に変更。
+  const bindAddress = config.get<string>("remoteView.bindAddress", DEFAULT_BIND_ADDRESS);
 
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders || workspaceFolders.length === 0) {
@@ -750,47 +761,46 @@ async function startRemoteViewServer(
     }
   });
 
+  const focusHost = createVSCodeFocusHost(vscode);
+
+  // InjectionDeps はサーバ起動時に1回だけ生成する（B-10）。
+  // type メッセージが来るたびに再生成していたのを巻き上げ。
+  const server = remoteServer;
+  const injectionDeps = createVSCodeInjectionDeps({
+    getSelectedColumn: () => server.getSelectedColumn(),
+    getGroupCount: () => vscode.window.tabGroups.all.length,
+    routeFocus: (col) => routeFocusToColumn(focusHost, col),
+    getActiveGroupIndex: () => focusHost.getActiveGroupIndex(),
+    readClipboard: () => Promise.resolve(vscode.env.clipboard.readText()),
+    writeClipboard: (text) => Promise.resolve(vscode.env.clipboard.writeText(text)),
+    showWarning: (m) => vscode.window.showWarningMessage(m),
+    execWithTimeout: (cmd, timeoutMs) =>
+      new Promise<string>((resolve, reject) => {
+        const child = exec(cmd, (err, stdout) => {
+          clearTimeout(timer);
+          if (err) reject(err);
+          else resolve(stdout.trim());
+        });
+        // タイムアウト時に子プロセスを kill してから reject する。
+        // kill しないと生き残った osascript が遅延 keystroke を発火し、
+        // クリップボード復元後の前面アプリへ貼り付けが漏れる（fail-closed 違反）。
+        const timer = setTimeout(() => {
+          child.kill("SIGTERM");
+          reject(new Error("osascript timeout"));
+        }, timeoutMs);
+      }),
+    sendInjectResult: (result) => server.sendInjectResult(result),
+  });
+
   remoteServer.onClientMessage(async (msg) => {
     if (msg.type === "type") {
       // サーバ側でも検証済みだが、入力注入は防衛多層化のため型・長さを再検証。
       if (typeof msg.text !== "string" || msg.text.length === 0 || msg.text.length > 2000) {
         return;
       }
-      await vscode.env.clipboard.writeText(msg.text);
-
-      // まずClaude Codeのフォーカスを試みる
-      try {
-        await vscode.commands.executeCommand("claude-vscode.focus");
-      } catch {
-        // Claude Code extension may not be installed
-      }
-
-      // フォーカス完了まで少し待ってからキーストローク送信。
-      // ただし「前面アプリが VS Code のときだけ」貼り付け+Enterを送る。
-      // 別アプリ（ターミナル等）が前面に来ている隙に誤爆させないためのガード。
-      setTimeout(() => {
-        exec(
-          `osascript -e 'tell application "System Events" to name of first application process whose frontmost is true'`,
-          (frontErr, frontStdout) => {
-            const front = (frontStdout || "").trim();
-            const isVSCode = /code|electron|visual studio code/i.test(front);
-            if (frontErr || !isVSCode) {
-              vscode.window.showWarningMessage(
-                `Editor Spotlighter: 前面アプリ（${front || "不明"}）がVS Codeでないため、リモート入力を中止しました。`
-              );
-              return;
-            }
-            exec(`osascript -e 'tell application "System Events" to keystroke "v" using command down' -e 'delay 0.3' -e 'tell application "System Events" to keystroke return'`, (err) => {
-              if (err) {
-                console.error(`[Editor Spotlighter][type] osascript error: ${err.message}`);
-                vscode.window.showWarningMessage(
-                  "Editor Spotlighter: テキスト送信にはアクセシビリティ権限が必要です。システム設定 → プライバシーとセキュリティ → アクセシビリティ で Visual Studio Code を許可してください。"
-                );
-              }
-            });
-          }
-        );
-      }, 500);
+      // 注入パイプライン経由で列ルーティング・フォーカス確定検証・束ね検査を実行する。
+      // claude-vscode.focus / setTimeout 500ms は撤去済み（要件 a-1, a-2）。
+      await runInjectionPipeline(msg.text, injectionDeps);
     } else if (msg.type === "switchTab") {
       const groups = vscode.window.tabGroups.all;
       if (msg.groupIndex < groups.length) {
@@ -829,20 +839,25 @@ async function startRemoteViewServer(
   remoteStatusBarItem.show();
   context.subscriptions.push(remoteStatusBarItem);
 
-  // QRコードをサイドバーのWebViewに表示
-  // Cloudflare Tunnel経由の固定URL（設定可能）
+  // QRコードをサイドバーの WebView に表示（qrPolicy で表示種別を決定）
   const tunnelDomain = config.get<string>("remoteView.tunnelDomain", "");
-  let url: string;
-  if (tunnelDomain) {
-    url = `https://${tunnelDomain}/`;
-  } else {
-    const localIp = getLocalIpAddress();
-    url = `http://${localIp}:${port}/`;
-  }
-  const qrSvg = await QRCode.toString(url, { type: "svg" });
+  const localIp = getLocalIpAddress();
+  const accessDisplay = decideRemoteAccessDisplay({
+    bindAddress,
+    tunnelDomain,
+    port,
+    lanIp: localIp,
+  });
 
   if (remoteWebviewProvider) {
-    remoteWebviewProvider.setRunning(qrSvg, url, password);
+    if (accessDisplay.kind === "localOnly") {
+      // 127.0.0.1 待ち受け×tunnel 未設定 → 繋がらない QR を出さず案内を表示
+      remoteWebviewProvider.setLocalOnly(accessDisplay.url, password);
+    } else {
+      const url = accessDisplay.url;
+      const qrSvg = await QRCode.toString(url, { type: "svg" });
+      remoteWebviewProvider.setRunning(qrSvg, url, password);
+    }
   }
 
   // タブ情報の初期送信のみ（リスナーはactivate内で1回だけ登録済み）
@@ -851,6 +866,31 @@ async function startRemoteViewServer(
   vscode.window.showInformationMessage(
     `Editor Spotlighter: Remote View started on port ${port}`
   );
+
+  // 初回移行案内（c-3）: bindAddress が 127.0.0.1 系×tunnel 未設定×明示設定なしのとき1回だけ表示
+  const MIGRATION_NOTICE_KEY = "remoteView.bindMigrationNoticeShown";
+  // accessDisplay.kind === "localOnly" は上で確定済みのため再判定不要（B-3）
+  const isLocalOnly = accessDisplay.kind === "localOnly";
+  // config.get は default があるため常に非 undefined。inspect で明示設定有無を正しく判定（B-2）
+  const bindInspect = config.inspect<string>("remoteView.bindAddress");
+  const isUserExplicit =
+    bindInspect?.globalValue !== undefined ||
+    bindInspect?.workspaceValue !== undefined ||
+    bindInspect?.workspaceFolderValue !== undefined;
+  const noticeShown = context.globalState.get<boolean>(MIGRATION_NOTICE_KEY, false);
+
+  if (isLocalOnly && !isUserExplicit && !noticeShown) {
+    await context.globalState.update(MIGRATION_NOTICE_KEY, true);
+    // fire-and-forget: アクティベーション完了を案内応答まで待たせない（B-1）
+    vscode.window.showInformationMessage(
+      "Editor Spotlighter: リモートビューの待ち受け既定がローカルのみ（127.0.0.1）に変わりました。LAN 直結（QR読み取り）を使うには設定変更が必要です",
+      "設定を開く"
+    ).then((action) => {
+      if (action === "設定を開く") {
+        vscode.commands.executeCommand("workbench.action.openSettings", "editorSpotlighter.remoteView");
+      }
+    });
+  }
 }
 
 function updateRemoteTabs(): void {
@@ -879,6 +919,11 @@ function updateRemoteTabs(): void {
     }
   }
   remoteServer.setTabInfo(tabs);
+
+  // 実グループ数ベースで列数とラベルを更新（要件 b-2, b-3）
+  const groupCount = vscode.window.tabGroups.all.length;
+  const labels = deriveColumnLabels(tabs, groupCount);
+  remoteServer.setColumns(groupCount, labels);
 }
 
 async function stopRemoteViewServer(): Promise<void> {

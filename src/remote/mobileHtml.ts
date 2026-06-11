@@ -11,7 +11,7 @@ export function getMobileHtml(): string {
   html, body {
     height: 100%;
     overflow: hidden;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     background: #ffffff;
     color: #1a1a1a;
     -webkit-text-size-adjust: 100%;
@@ -38,25 +38,53 @@ export function getMobileHtml(): string {
     display: block;
   }
 
+  /* タスク13: 切替中オーバーレイ */
+  #switchingOverlay {
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 12;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  #switchingOverlay.visible {
+    display: flex;
+  }
+
   #columnBar {
     display: flex;
     background: #f3f4f6;
     border-top: 1px solid #e5e7eb;
-    min-height: 48px;
+    min-height: 56px;
     flex-shrink: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
+  /* タスク11: 動的生成ボタンのスタイル（2段表示対応） */
   .col-btn {
     flex: 1;
+    min-width: 60px;
     background: none;
     border: none;
     border-bottom: 3px solid transparent;
-    font-size: 16px;
-    font-weight: 600;
-    color: #9ca3af;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
     transition: color 0.15s, border-color 0.15s;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 6px;
+    gap: 2px;
   }
 
   .col-btn:active {
@@ -64,16 +92,53 @@ export function getMobileHtml(): string {
   }
 
   .col-btn.active {
-    color: #7c3aed;
     border-bottom-color: #7c3aed;
+  }
+
+  .col-btn.active .col-num {
+    color: #7c3aed;
+  }
+
+  .col-btn.active .col-label {
+    color: #7c3aed;
+  }
+
+  .col-btn.switching {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  .col-num {
+    font-size: 16px;
+    font-weight: 600;
+    color: #9ca3af;
+    line-height: 1;
+  }
+
+  .col-label {
+    font-size: 10px;
+    color: #9ca3af;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 70px;
+    line-height: 1;
   }
 
   #inputBar {
     flex-shrink: 0;
-    padding: 8px 12px calc(env(safe-area-inset-bottom, 8px) + 8px);
+    padding: 6px 12px calc(env(safe-area-inset-bottom, 8px) + 8px);
     background: #ffffff;
     border-top: 1px solid #e5e7eb;
     z-index: 10;
+  }
+
+  /* タスク13: 送信先表示 */
+  #destinationBar {
+    font-size: 11px;
+    color: #6b7280;
+    padding: 2px 4px 4px;
+    min-height: 18px;
   }
 
   .input-row {
@@ -103,6 +168,12 @@ export function getMobileHtml(): string {
     color: #9ca3af;
   }
 
+  #textInput:disabled {
+    background: #f3f4f6;
+    color: #9ca3af;
+    border-color: #e5e7eb;
+  }
+
   #sendBtn {
     width: 36px;
     height: 36px;
@@ -122,6 +193,50 @@ export function getMobileHtml(): string {
   #sendBtn:active {
     background: #6d28d9;
     transform: scale(0.95);
+  }
+
+  #sendBtn:disabled {
+    background: #d1d5db;
+    cursor: default;
+    transform: none;
+  }
+
+  /* タスク14: 閲覧専用表示 */
+  #readonlyLabel {
+    display: none;
+    font-size: 11px;
+    color: #9ca3af;
+    padding: 2px 4px;
+    text-align: center;
+  }
+
+  #readonlyLabel.visible {
+    display: block;
+  }
+
+  /* タスク14: トースト通知 */
+  #toast {
+    display: none;
+    position: fixed;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 90px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(30, 30, 30, 0.9);
+    color: #fff;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
+    max-width: 80vw;
+    text-align: center;
+    z-index: 30;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #toast.visible {
+    display: block;
   }
 
   .reconnecting-banner {
@@ -171,25 +286,28 @@ export function getMobileHtml(): string {
 <body>
 
 <div class="reconnecting-banner" id="reconnectBanner">Reconnecting...</div>
+<div id="toast"></div>
 
 <div class="app">
   <div id="screen">
     <button id="closeBtn" aria-label="Close">&times;</button>
     <img id="frame" />
+    <!-- タスク13: 切替中オーバーレイ -->
+    <div id="switchingOverlay"></div>
   </div>
 
-  <div id="columnBar">
-    <button class="col-btn active" data-col="0">1</button>
-    <button class="col-btn" data-col="1">2</button>
-    <button class="col-btn" data-col="2">3</button>
-    <button class="col-btn" data-col="3">4</button>
-  </div>
+  <!-- タスク11: 動的生成に変更（固定4ボタンを撤去） -->
+  <div id="columnBar"></div>
 
   <div id="inputBar">
+    <!-- タスク13: 送信先表示 -->
+    <div id="destinationBar"></div>
     <div class="input-row">
-      <input id="textInput" type="text" placeholder="Type here..." />
+      <input id="textInput" type="text" placeholder="Type here..." maxlength="2000" />
       <button id="sendBtn">&#9654;</button>
     </div>
+    <!-- タスク14: 閲覧専用表示 -->
+    <div id="readonlyLabel">閲覧専用</div>
   </div>
 </div>
 
@@ -200,26 +318,226 @@ export function getMobileHtml(): string {
   var sendBtn = document.getElementById('sendBtn');
   var closeBtn = document.getElementById('closeBtn');
   var reconnectBanner = document.getElementById('reconnectBanner');
+  var columnBar = document.getElementById('columnBar');
+  var switchingOverlay = document.getElementById('switchingOverlay');
+  var destinationBar = document.getElementById('destinationBar');
+  var readonlyLabel = document.getElementById('readonlyLabel');
+  var toastEl = document.getElementById('toast');
   var ws = null;
   var reconnectTimer = null;
 
-  var columnBar = document.getElementById('columnBar');
-  var colBtns = columnBar.querySelectorAll('.col-btn');
+  // タスク13/14: クライアント状態（design.md 5.2 状態遷移）
+  // 状態: 'syncing' | 'idle' | 'switching' | 'sending'
+  var clientState = 'syncing';
   var activeColumn = 0;
+  var columnLabels = [];
+  var allowInput = false;
+  var sendingTimer = null;
+  var toastTimer = null;
+  // 差し戻し修正1 / F-1: オーバーレイ早期解除防止フラグ（b-4対応）
+  // awaitingAck=true の間（列タップ後〜ACK columns受信前）は frame によるオーバーレイ解除を行わない
+  // awaitingFrame=true（ACK columns受信後〜次フレーム受信前）になってから解除する
+  var awaitingAck = false;
+  var awaitingFrame = false;
+  // F-1: タップした列番号を記録（ACK相関用。ACK columns の msg.active と照合する）
+  var pendingColumn = -1;
+  // F-7: 前回の columns 適用値（DOM再生成スキップ判定用）
+  var lastColumnsCount = -1;
+  var lastColumnsLabels = [];
+  var lastColumnsActive = -1;
+  var lastColumnsAllowInput = true;
 
-  function selectColumn(col) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    activeColumn = col;
-    for (var i = 0; i < colBtns.length; i++) {
-      colBtns[i].className = colBtns[i].dataset.col == col ? 'col-btn active' : 'col-btn';
+  // タスク14: reason→日本語文言マップ（固定文言・サーバ値を直接描画しない・design 3.2）
+  var INJECT_REASON_MESSAGES = {
+    busy: '送信中です。完了後に再送してください',
+    columnOutOfRange: '選択した列が存在しません',
+    noClaudeTab: 'この列に Claude Code セッションがありません',
+    focusUnverified: 'フォーカスを確定できませんでした',
+    frontAppNotVSCode: '前面アプリが VS Code ではありません',
+    stateChanged: '送信中に列の状態が変わりました',
+    internalError: '内部エラーが発生しました'
+  };
+  var INJECT_REASON_FALLBACK = '送信を中止しました';
+  var INJECT_TIMEOUT_MESSAGE = '結果不明・画面で確認してください';
+
+  // タスク14: トースト表示（textContent で挿入・innerHTML 不使用）
+  function showToast(message) {
+    clearTimeout(toastTimer);
+    toastEl.textContent = message;
+    toastEl.classList.add('visible');
+    toastTimer = setTimeout(function() {
+      toastEl.classList.remove('visible');
+    }, 3000);
+  }
+
+  // タスク14: 入力コントロールの有効/無効状態を設定
+  function setInputEnabled(enabled) {
+    textInput.disabled = !enabled;
+    sendBtn.disabled = !enabled;
+  }
+
+  // タスク13/14: 状態遷移を一元管理
+  function applyState() {
+    if (clientState === 'syncing') {
+      // WS open 後は columns 受信まで入力無効（エッジケース6）
+      setInputEnabled(false);
+      destinationBar.textContent = '同期中...';
+      return;
     }
+    if (!allowInput) {
+      // 閲覧専用（エッジケース3）
+      setInputEnabled(false);
+      readonlyLabel.classList.add('visible');
+      updateDestinationDisplay();
+      return;
+    }
+    readonlyLabel.classList.remove('visible');
+    if (clientState === 'switching') {
+      setInputEnabled(false);
+      updateDestinationDisplay();
+      return;
+    }
+    if (clientState === 'sending') {
+      setInputEnabled(false);
+      updateDestinationDisplay();
+      return;
+    }
+    // idle
+    setInputEnabled(true);
+    updateDestinationDisplay();
+  }
+
+  // タスク13: 送信先表示を更新（サーバACK後のみ・textContent で挿入）
+  function updateDestinationDisplay() {
+    var colNum = activeColumn + 1;
+    var label = columnLabels[activeColumn] || '';
+    if (label) {
+      destinationBar.textContent = '→ 列' + colNum + '・' + label;
+    } else {
+      destinationBar.textContent = '→ 列' + colNum;
+    }
+  }
+
+  // タスク11: columns メッセージから列バーのボタンを動的生成（textContent で挿入）
+  function rebuildColumnBar(count, labels, active) {
+    while (columnBar.firstChild) {
+      columnBar.removeChild(columnBar.firstChild);
+    }
+    for (var i = 0; i < count; i++) {
+      var btn = document.createElement('button');
+      btn.className = 'col-btn' + (i === active ? ' active' : '');
+      btn.dataset.col = String(i);
+
+      var numSpan = document.createElement('span');
+      numSpan.className = 'col-num';
+      numSpan.textContent = String(i + 1);
+
+      var labelSpan = document.createElement('span');
+      labelSpan.className = 'col-label';
+      // タブ名は textContent で挿入（innerHTML 禁止・design 3.2）
+      labelSpan.textContent = labels[i] || '';
+
+      btn.appendChild(numSpan);
+      btn.appendChild(labelSpan);
+
+      btn.addEventListener('click', (function(col) {
+        return function() {
+          handleColumnTap(col);
+        };
+      })(i));
+
+      columnBar.appendChild(btn);
+    }
+  }
+
+  // タスク13: 列タップ処理（切替中状態に遷移・ACK待ち）
+  function handleColumnTap(col) {
+    if (clientState !== 'idle') return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    // 差し戻し修正2: 同一列タップは無操作（サーバが columns を返さず切替中で固着する経路を防ぐ）
+    if (col === activeColumn) return;
+    // 切替中状態に遷移（送信先表示はサーバACK＝columns受信まで更新しない）
+    clientState = 'switching';
+    // F-1: タップ列を記録（ACK相関用）
+    pendingColumn = col;
+    // 差し戻し修正1: ACK待ちフラグをセット（この間の frame ではオーバーレイ解除しない）
+    awaitingAck = true;
+    awaitingFrame = false;
+    // 切替中オーバーレイ表示（textContent で挿入）
+    switchingOverlay.textContent = '列' + (col + 1) + ' に切替中…';
+    switchingOverlay.classList.add('visible');
+    // 全ボタンを切替中スタイルに
+    var btns = columnBar.querySelectorAll('.col-btn');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].classList.add('switching');
+    }
+    applyState();
     ws.send(JSON.stringify({ type: 'selectColumn', column: col }));
   }
 
-  for (var i = 0; i < colBtns.length; i++) {
-    colBtns[i].addEventListener('click', function() {
-      selectColumn(parseInt(this.dataset.col, 10));
-    });
+  // F-7: columns の各値が前回適用値と一致するか判定（DOM再生成スキップ用）
+  function columnsUnchanged(count, labels, active, ai) {
+    if (count !== lastColumnsCount || active !== lastColumnsActive || ai !== lastColumnsAllowInput) {
+      return false;
+    }
+    if (labels.length !== lastColumnsLabels.length) { return false; }
+    for (var i = 0; i < labels.length; i++) {
+      if (labels[i] !== lastColumnsLabels[i]) { return false; }
+    }
+    return true;
+  }
+
+  // タスク11/12: columns 受信処理（動的生成＋差分更新・タブ名追従）
+  function handleColumnsMessage(msg) {
+    var newLabels = msg.labels || [];
+    var newCount = msg.count;
+    var newActive = msg.active;
+    var newAllowInput = msg.allowInput !== false;
+
+    // F-1: ACK相関判定（ACK判定は DOM 更新・スキップ判定より先に行う）
+    // switching 中かつ awaitingAck の場合のみ ACK として扱う
+    // ACK条件: msg.active === pendingColumn（正常到達）
+    //          または pendingColumn >= msg.count（列削除でクランプされた）
+    var isAck = awaitingAck && clientState === 'switching' &&
+      (newActive === pendingColumn || pendingColumn >= newCount);
+
+    // 非ACK の columns は switching 状態を維持したままラベル・列バーを更新するだけにする
+    // （PC側タブ変更等の無関係なブロードキャストで switching が解除されないようにする）
+
+    // 状態変数を更新
+    activeColumn = newActive;
+    columnLabels = newLabels;
+    allowInput = newAllowInput;
+
+    // F-7: 前回適用値と完全一致なら DOM 再生成をスキップ（横スクロール位置を保護）
+    // ただし ACK 受領時はアクティブボタン強調の更新が必要なためスキップしない
+    if (!isAck && columnsUnchanged(newCount, newLabels, newActive, newAllowInput)) {
+      // DOM再生成スキップ（状態変数は既に更新済み）
+    } else {
+      // タスク11: ボタンを動的生成（textContent 使用で XSS 防止）
+      rebuildColumnBar(newCount, newLabels, newActive);
+      // F-7: 適用値を記録
+      lastColumnsCount = newCount;
+      lastColumnsLabels = newLabels.slice();
+      lastColumnsActive = newActive;
+      lastColumnsAllowInput = newAllowInput;
+    }
+
+    // F-1: ACK のときだけ switching を解除して awaitingFrame に遷移
+    if (isAck) {
+      clientState = 'idle';
+      pendingColumn = -1;
+      awaitingAck = false;
+      awaitingFrame = true;
+    } else if (clientState === 'syncing') {
+      // 初回 columns 受信で syncing を解除
+      clientState = 'idle';
+      awaitingAck = false;
+      awaitingFrame = false;
+    }
+    // switching 中で非ACKの場合は clientState = 'switching' のまま維持
+
+    applyState();
   }
 
   function connect() {
@@ -230,6 +548,19 @@ export function getMobileHtml(): string {
 
     ws.onopen = function() {
       reconnectBanner.classList.remove('visible');
+      // タスク14: WS open 後は columns 受信まで入力無効
+      clientState = 'syncing';
+      // F-2: 再接続時に切替中フラグ・ペンディング状態をリセット（前回の状態を引きずらない）
+      pendingColumn = -1;
+      awaitingAck = false;
+      awaitingFrame = false;
+      switchingOverlay.classList.remove('visible');
+      // 前回の columns キャッシュをクリア（再接続後は必ずサーバ値で再描画する）
+      lastColumnsCount = -1;
+      lastColumnsLabels = [];
+      lastColumnsActive = -1;
+      lastColumnsAllowInput = true;
+      applyState();
       var pixelWidth = Math.round(screen.width * (window.devicePixelRatio || 1));
       ws.send(JSON.stringify({ type: 'screenInfo', width: pixelWidth }));
     };
@@ -237,6 +568,9 @@ export function getMobileHtml(): string {
     ws.onclose = function() {
       reconnectBanner.classList.add('visible');
       reconnectBanner.textContent = 'Reconnecting in 3s...';
+      // 切断時は sending タイムアウトをクリア
+      clearTimeout(sendingTimer);
+      sendingTimer = null;
       clearTimeout(reconnectTimer);
       reconnectTimer = setTimeout(function() {
         reconnectBanner.textContent = 'Reconnecting...';
@@ -248,12 +582,46 @@ export function getMobileHtml(): string {
       var msg = JSON.parse(e.data);
       if (msg.type === 'frame') {
         frame.src = msg.data;
-      } else if (msg.type === 'columns') {
-        for (var i = 0; i < colBtns.length; i++) {
-          colBtns[i].style.display = i < msg.count ? '' : 'none';
-          colBtns[i].className = i === msg.active ? 'col-btn active' : 'col-btn';
+        // F-3 / 差し戻し修正1: オーバーレイ解除は awaitingFrame=true の時のみ
+        // awaitingAck 中（列タップ後〜ACK columns受信前）の旧列フレームでは解除しない
+        // F-3: frame に column フィールドが付与されている場合は activeColumn と照合する
+        //      column 未付与（undefined）の frame では従来どおり awaitingFrame のみで解除（後方互換）
+        if (awaitingFrame) {
+          var frameCol = msg.column;
+          var colMatch = (typeof frameCol !== 'number') || (frameCol === activeColumn);
+          if (colMatch) {
+            awaitingFrame = false;
+            switchingOverlay.classList.remove('visible');
+          }
         }
-        activeColumn = msg.active;
+      } else if (msg.type === 'columns') {
+        // タスク11/12/13/14: columns 受信処理
+        handleColumnsMessage(msg);
+      } else if (msg.type === 'injectResult') {
+        // タスク14: 注入結果トースト表示
+        clearTimeout(sendingTimer);
+        sendingTimer = null;
+        var savedText = pendingText;
+        pendingText = '';
+        if (clientState === 'sending') {
+          clientState = 'idle';
+          applyState();
+        }
+        if (msg.ok) {
+          showToast('列' + (msg.column + 1) + ' に送信しました');
+        } else {
+          var reason = msg.reason;
+          // reason はクライアント内固定マップ経由で日本語文言化（サーバ値を直接描画しない）
+          // F-6: hasOwnProperty.call ガードでプロトタイプ連鎖参照（"constructor" 等）を遮断
+          var reasonText = (reason && Object.prototype.hasOwnProperty.call(INJECT_REASON_MESSAGES, reason))
+            ? INJECT_REASON_MESSAGES[reason]
+            : INJECT_REASON_FALLBACK;
+          showToast(reasonText);
+          // F-5: 失敗時に入力欄が空なら本文を復元（再入力の全損を防ぐ）
+          if (!textInput.value && savedText) {
+            textInput.value = savedText;
+          }
+        }
       }
     };
   }
@@ -266,12 +634,32 @@ export function getMobileHtml(): string {
     ws.send(JSON.stringify({ type: 'click', x: x, y: y }));
   });
 
+  // F-5: 失敗時の本文復元用に送信中テキストを保持
+  var pendingText = '';
+
   sendBtn.addEventListener('click', function() {
     var text = textInput.value;
     if (!text) { return; }
     if (!ws || ws.readyState !== WebSocket.OPEN) { return; }
+    if (clientState !== 'idle') { return; }
+    // タスク14: 送信中状態に遷移（送信ボタン無効化）
+    clientState = 'sending';
+    // F-5: 送信本文を保持（injectResult ok:false 受信時に復元する）
+    pendingText = text;
+    applyState();
     ws.send(JSON.stringify({ type: 'type', text: text }));
     textInput.value = '';
+    // タスク14: 10秒安全タイムアウト（injectResult が届かない場合の解除）
+    clearTimeout(sendingTimer);
+    sendingTimer = setTimeout(function() {
+      sendingTimer = null;
+      if (clientState === 'sending') {
+        clientState = 'idle';
+        pendingText = '';
+        applyState();
+        showToast(INJECT_TIMEOUT_MESSAGE);
+      }
+    }, 10000);
   });
 
   textInput.addEventListener('keydown', function(e) {
@@ -283,6 +671,8 @@ export function getMobileHtml(): string {
   closeBtn.addEventListener('click', function() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
+    clearTimeout(sendingTimer);
+    sendingTimer = null;
     if (ws) {
       ws.onclose = null;
       if (ws.readyState === WebSocket.OPEN) {
@@ -312,7 +702,7 @@ export function getLoginHtml(hasError: boolean): string {
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
     height: 100%;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     background: #f8f9fa;
     display: flex;
     align-items: center;
