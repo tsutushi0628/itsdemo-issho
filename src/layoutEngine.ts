@@ -16,6 +16,15 @@ export interface EditorLayout {
   groups: EditorLayoutLeaf[];
 }
 
+function equalLayout(totalColumns: number): EditorLayout {
+  const equalSize = 1 / totalColumns;
+  const groups: EditorLayoutLeaf[] = [];
+  for (let i = 0; i < totalColumns; i++) {
+    groups.push({ groups: [{}], size: equalSize });
+  }
+  return { orientation: 0, groups };
+}
+
 export function calculateLayout(
   config: LayoutConfig,
   activeIndices: Set<number>
@@ -24,12 +33,7 @@ export function calculateLayout(
   const activeColumns = activeIndices.size;
 
   if (activeColumns >= totalColumns) {
-    const equalSize = 1 / totalColumns;
-    const groups: EditorLayoutLeaf[] = [];
-    for (let i = 0; i < totalColumns; i++) {
-      groups.push({ groups: [{}], size: equalSize });
-    }
-    return { orientation: 0, groups };
+    return equalLayout(totalColumns);
   }
 
   const VSCODE_MIN_GROUP_WIDTH = 230;
@@ -41,6 +45,13 @@ export function calculateLayout(
   const activeSize = inactiveCount > 0
     ? (1 - inactiveCount * inactiveSize) / activeCount
     : 1 / totalColumns;
+
+  // 窓が狭く非アクティブ固定幅だけで全幅を食い尽くす（アクティブが非アクティブ以下に
+  // 潰れる）場合、アコーディオンは成立しない。負値・極小比率を VS Code に渡すと
+  // クランプで崩れるため、等間隔へフォールバックする。
+  if (activeSize <= inactiveSize) {
+    return equalLayout(totalColumns);
+  }
 
   const groups: EditorLayoutLeaf[] = [];
   for (let i = 0; i < totalColumns; i++) {

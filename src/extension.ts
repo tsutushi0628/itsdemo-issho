@@ -145,16 +145,39 @@ export async function activate(
 
   await syncSidebarToActiveColumns(activeColumns);
 
-  // ウィンドウ幅の再取得（整形ボタン or 初回のみ）
-  const refreshWindowWidth = async () => {
-    try {
-      const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold, maxActiveColumns);
-      activeColumns = info.activeColumns;
-      windowWidth = info.windowWidth;
-      log(`[width-refresh] activeColumns=${activeColumns}, windowWidth=${windowWidth}`);
-    } catch {
-      // 取得失敗時は前の値を維持
+  // ウィンドウ幅の実測はOSプロセス起動を伴い1〜2秒かかる。フォーカス処理の中で
+  // 待つと「広がるまでの遅延」になり、待っている間に別フォーカスの処理が割り込んで
+  // レイアウトが二重適用される不安定も生む（MacBook Air単体時に顕著だった実害）。
+  // 実測は裏で1本だけ走らせ、幅が変わっていた時だけ再整形を通す。
+  // 最短間隔: フォーカス連発中に実測プロセスが切れ目なく立ち続けるのを防ぐ
+  // （実測自体が1〜2秒かかるため、無制限だとほぼ常時OSプロセスが走る）。
+  // ディスプレイ切替への追従はこの間隔＋実測時間ぶん遅れるだけで自動回復する。
+  const WIDTH_REFRESH_MIN_INTERVAL_MS = 5000;
+  let widthRefreshInFlight = false;
+  let lastWidthRefreshAt = 0;
+  const refreshWindowWidthInBackground = () => {
+    if (widthRefreshInFlight || Date.now() - lastWidthRefreshAt < WIDTH_REFRESH_MIN_INTERVAL_MS) {
+      return;
     }
+    widthRefreshInFlight = true;
+    detectWindowWidth()
+      .then((w) => {
+        if (w !== windowWidth) {
+          log(`[width-refresh] windowWidth ${windowWidth} -> ${w}`);
+          windowWidth = w;
+          // 幅が変わった＝ディスプレイ切替や窓リサイズ。前回適用済み比率の記録を
+          // 破棄して、新しい幅での再整形を必ず通す。
+          lastLayoutSignature = undefined;
+          onFocusChange();
+        }
+      })
+      .catch(() => {
+        // 取得失敗時は前回の幅を維持（次回の呼び出しで再試行される）
+      })
+      .finally(() => {
+        widthRefreshInFlight = false;
+        lastWidthRefreshAt = Date.now();
+      });
   };
 
   const onFocusChange = () => {
@@ -184,14 +207,11 @@ export async function activate(
           break;
         }
       }
-      // ウィンドウ幅を再取得してactiveColumnsを更新
-      try {
-        const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold, maxActiveColumns);
-        activeColumns = info.activeColumns;
-        windowWidth = info.windowWidth;
-      } catch {
-        // 取得失敗時は前の値を維持
-      }
+      // アクティブ本数はキャッシュ済みのウィンドウ幅から即時計算する（実測を
+      // ここで待たない）。実測は裏で走らせ、幅が変わっていた時だけ再整形が入る。
+      const editorWidthForCount = deriveEditorWidth(windowWidth, sidebarWidthWhenOpen, EDITOR_CHROME_MARGIN);
+      activeColumns = computeActiveColumns(editorWidthForCount, minColumnWidth, totalColumns, fullWidthThreshold, maxActiveColumns);
+      refreshWindowWidthInBackground();
 
       await syncSidebarToActiveColumns(activeColumns);
 
@@ -201,19 +221,28 @@ export async function activate(
         return;
       }
 
-      // 既にアクティブなら先頭に移動
-      activeHistory = activeHistory.filter(i => i !== focusedGroupIndex);
+      // レイアウトモデルは totalColumns 列の固定格子。それを超える実グループに
+      // フォーカスがある間は格子で表現できないため、レイアウトを触らない。
+      if (focusedGroupIndex >= totalColumns) {
+        log(`[apply-layout-skip] focused=${focusedGroupIndex} exceeds totalColumns=${totalColumns}`);
+        return;
+      }
+
+      // グループ削減後に残った範囲外の履歴を捨て（範囲外indexが混ざると比率の合計が
+      // 1を割り、VS Code側の再正規化で幅が崩れる）、既にアクティブなら先頭へ移動
+      activeHistory = activeHistory.filter(i => i < totalColumns && i !== focusedGroupIndex);
       activeHistory.unshift(focusedGroupIndex);
       // activeColumns数を超えたら古いものを押し出す
       if (activeHistory.length > activeColumns) {
         activeHistory = activeHistory.slice(0, activeColumns);
       }
-      const activeIndices = new Set(activeHistory);
 
-      // ウルトラワイド等で全カラムアクティブならレイアウトを触らない
-      if (activeColumns >= totalColumns) {
-        return;
-      }
+      // 全カラムアクティブ（ウルトラワイド・等間隔モード）では履歴に依らず全列を
+      // アクティブ扱いにして等間隔を適用する。従来はここで return しており、
+      // 画面切替やグループ開閉で偏った幅が放置されていた（手動整形54回の実害）。
+      const activeIndices = activeColumns >= totalColumns
+        ? new Set(Array.from({ length: totalColumns }, (_, i) => i))
+        : new Set(activeHistory);
 
       // アコーディオン適用（常にtotalColumnsを使う）
       const effectiveSidebarWidth = getEffectiveSidebarWidth();
@@ -249,7 +278,10 @@ export async function activate(
       } finally {
         setTimeout(() => { applyingLayout = false; }, SUPPRESS_EVENT_MS);
       }
-    }, 200);
+      // 100ms = フォーカス移動イベントの連発をまとめる待ち時間。幅実測を待たなく
+      // なった分ここが体感遅延の主成分になる。ログ上のイベント連発は数十ms間隔
+      // なので100msで十分に合流できる。
+    }, 100);
   };
 
   context.subscriptions.push(
@@ -266,7 +298,13 @@ export async function activate(
 
   context.subscriptions.push(
     vscode.window.tabGroups.onDidChangeTabGroups((e) => {
-      log(`[event] onDidChangeTabGroups fired`);
+      log(`[event] onDidChangeTabGroups fired (opened=${e.opened.length}, closed=${e.closed.length})`);
+      // グループの増減時はVS Codeが幅を勝手に再配分する。前回適用済み比率の記録が
+      // 残っていると「計算結果が前回と同じ」でスキップされ崩れたまま放置されるため、
+      // 記録を破棄して次回の再整形を必ず通す。
+      if (e.opened.length > 0 || e.closed.length > 0) {
+        lastLayoutSignature = undefined;
+      }
       onFocusChange();
       if (mobileConnected && remoteServer) {
         updateRemoteTabs();

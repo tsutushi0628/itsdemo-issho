@@ -179,6 +179,26 @@ describe("calculateLayout", () => {
     expect(inactiveSize * 4000).toBeCloseTo(VSCODE_MIN);
   });
 
+  it("狭い窓で非アクティブ固定幅が全幅を食い尽くす場合は等間隔にフォールバックして崩れない", () => {
+    // 800px窓・5カラム: 非アクティブ4本×230px=920px > 800px でアコーディオン不成立。
+    // 負の比率をVS Codeへ渡さず、等間隔で全列が同じ幅になることを検証する。
+    const config: LayoutConfig = {
+      totalColumns: 5,
+      windowWidth: 800,
+      minColumnWidth: 460,
+    };
+
+    const result = calculateLayout(config, new Set([1]));
+
+    expect(result.groups).toHaveLength(5);
+    for (const group of result.groups) {
+      expect(group.size).toBeCloseTo(1 / 5);
+      expect(group.size).toBeGreaterThan(0);
+    }
+    const total = result.groups.reduce((s, g) => s + g.size, 0);
+    expect(total).toBeCloseTo(1.0);
+  });
+
   it("複数アクティブでsize合計が1になる", () => {
     const config: LayoutConfig = {
       totalColumns: 4,
