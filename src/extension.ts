@@ -186,27 +186,30 @@ export async function activate(
   const LAYOUT_MATCH_TOLERANCE = 0.05;
   const LAYOUT_RECOVERY_MIN_INTERVAL_MS = 30000;
   let lastLayoutRecoveryAt = 0;
-  const verifyAndRecoverLayout = async (layout: EditorLayout): Promise<void> => {
+  // 戻り値: 反映を確認できたか。false の間は呼び出し元が適用済み記録（署名）を
+  // 残さず、次のフォーカスで必ず再適用を試みる（崩れたまま固定されるのを防ぐ）。
+  const verifyAndRecoverLayout = async (layout: EditorLayout): Promise<boolean> => {
     const first = await readBackLayout();
     if (first === undefined) {
       // 読み戻し非対応環境では検証せず従来挙動のまま進める
-      return;
+      return true;
     }
     if (layoutMatches(layout, first, LAYOUT_MATCH_TOLERANCE)) {
-      return;
+      return true;
     }
     // 回復が効かない環境でフォーカスのたびにサイドバーが点滅し続けるのを防ぐ
     if (Date.now() - lastLayoutRecoveryAt < LAYOUT_RECOVERY_MIN_INTERVAL_MS) {
       log(`[apply-verify-fail] recovery cooldown中のためスキップ`);
-      return;
+      return false;
     }
     lastLayoutRecoveryAt = Date.now();
     log(`[apply-verify-fail] actual=${JSON.stringify(first.groups.map(g => g.size))} -> evenEditorWidthsで回復試行`);
     await vscode.commands.executeCommand("workbench.action.evenEditorWidths");
     await applyLayout(layout);
-    if (layoutMatches(layout, await readBackLayout(), LAYOUT_MATCH_TOLERANCE)) {
+    const afterEven = await readBackLayout();
+    if (layoutMatches(layout, afterEven, LAYOUT_MATCH_TOLERANCE)) {
       log(`[apply-verify-recovered] evenEditorWidths`);
-      return;
+      return true;
     }
     // サイドバーを2回トグルしてワークベンチ全体の再レイアウトを誘発し、グリッドを
     // 実ウィンドウ幅へ追従させてから再適用する
@@ -217,9 +220,14 @@ export async function activate(
     const final = await readBackLayout();
     if (layoutMatches(layout, final, LAYOUT_MATCH_TOLERANCE)) {
       log(`[apply-verify-recovered] sidebar-relayout`);
-    } else {
-      log(`[apply-verify-fail] persists actual=${JSON.stringify(final?.groups.map(g => g.size))}`);
+      return true;
     }
+    log(`[apply-verify-fail] persists actual=${JSON.stringify(final?.groups.map(g => g.size))}`);
+    // 回復不能の有力原因はウィンドウ幅キャッシュの陳腐化（ディスプレイ切替）。
+    // 最短間隔を無視して実測を即時にやり直し、根本側から自動回復させる。
+    lastWidthRefreshAt = 0;
+    refreshWindowWidthInBackground();
+    return false;
   };
 
   const onFocusChange = () => {
@@ -311,8 +319,11 @@ export async function activate(
       applyingLayout = true;
       try {
         await applyLayout(layout);
-        await verifyAndRecoverLayout(layout);
-        lastLayoutSignature = signature;
+        // 反映を確認できた時だけ署名を記録する。未確認のまま記録すると、次の
+        // フォーカスが「計算結果が同じ」スキップに吸われ、崩れが固定される。
+        if (await verifyAndRecoverLayout(layout)) {
+          lastLayoutSignature = signature;
+        }
       } catch (error) {
         log(`[apply-error] ${(error as Error).message}`);
         vscode.window.showWarningMessage(
@@ -410,13 +421,13 @@ export async function activate(
 
   context.subscriptions.push(
     vscode.commands.registerCommand("editorSpotlighter.resetLayout", async () => {
-      await resetToEqual(totalColumns);
+      await resetToEqual(totalColumns, verifyAndRecoverLayout);
     })
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("editorSpotlighter.alignLayout", async () => {
-      await resetToEqual(totalColumns);
+      await resetToEqual(totalColumns, verifyAndRecoverLayout);
       // 履歴もリセット（全カラムをアクティブ扱いに）
       activeHistory = [];
       vscode.window.showInformationMessage(
@@ -649,7 +660,12 @@ export async function deactivate(): Promise<void> {
   await resetToEqual(totalColumns);
 }
 
-async function resetToEqual(totalColumns: number): Promise<void> {
+async function resetToEqual(
+  totalColumns: number,
+  // ユーザー起動の整形コマンドからは読み戻し検証を渡す（固着グリッドでの無音
+  // 空振り防止）。無効化・終了時の後始末では渡さず従来挙動のまま戻す。
+  verify?: (layout: import("./layoutEngine").EditorLayout) => Promise<boolean>
+): Promise<void> {
   const allIndices = new Set<number>();
   for (let i = 0; i < totalColumns; i++) {
     allIndices.add(i);
@@ -667,7 +683,9 @@ async function resetToEqual(totalColumns: number): Promise<void> {
   applyingLayout = true;
   try {
     await applyLayout(layout);
-    lastLayoutSignature = layout.groups.map(g => g.size.toFixed(4)).join('|');
+    if (!verify || await verify(layout)) {
+      lastLayoutSignature = layout.groups.map(g => g.size.toFixed(4)).join('|');
+    }
   } finally {
     setTimeout(() => { applyingLayout = false; }, SUPPRESS_EVENT_MS);
   }
