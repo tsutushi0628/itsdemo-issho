@@ -124,7 +124,7 @@
         "editorSpotlighter.remoteView.password": {
           "type": "string",
           "default": "",
-          "description": "リモートビューの接続パスワード。空のままにすると起動ごとに高エントロピーのワンタイムパスワードを自動生成し、サイドバーに表示します（推奨）。固定値を設定すると常にその値を使います"
+          "description": "リモートビューの接続パスワード。空のままにすると起動ごとに高エントロピーのワンタイムパスワードを自動生成し、QRに埋め込んでスキャン時に自動ログインします（推奨・起動ごとに失効）。固定値を設定するとQR画像に長期有効な秘密として埋め込まれるため、QRの撮影・画面共有に注意してください。"
         },
         "editorSpotlighter.remoteView.allowRemoteInput": {
           "type": "boolean",

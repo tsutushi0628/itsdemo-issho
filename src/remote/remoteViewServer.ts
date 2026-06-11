@@ -2,7 +2,9 @@ import http from "http";
 import { URL } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import { exec } from "child_process";
+import fs from "fs";
 import sharp from "sharp";
+import crypto from "crypto";
 import { validatePassword, generateSessionToken } from "./tokenAuth";
 import { getMobileHtml, getLoginHtml } from "./mobileHtml";
 import { ClientMessage, ServerMessage, TabInfo, InjectAbortReason } from "./protocol";
@@ -12,6 +14,30 @@ import { DEFAULT_BIND_ADDRESS } from "./qrPolicy";
 import net from "net";
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // セッション有効期限（12時間）
+const CAPTURE_INTERVAL_MS = 1500; // 定期キャプチャ間隔（接続中のみ）
+
+/**
+ * フレーム送信判定の純関数。
+ * 前回と同一ハッシュ＆同一列なら送信スキップ（アイドル時帯域・電池を節約）。
+ * 前回なし（初回/リセット後）・列変化・ハッシュ変化なら送信する。
+ */
+export function shouldSendFrame(
+  prev: { hash: string; column: number } | null,
+  next: { hash: string; column: number }
+): boolean {
+  if (!prev) return true;
+  if (prev.column !== next.column) return true;
+  return prev.hash !== next.hash;
+}
+
+/**
+ * windowId 解決のバックオフ判定純関数。
+ * nextRetryAt が null（未設定）または now >= nextRetryAt なら解決を試みてよい。
+ */
+export function shouldAttemptResolve(now: number, nextRetryAt: number | null): boolean {
+  if (nextRetryAt === null) return true;
+  return now >= nextRetryAt;
+}
 
 /**
  * 選択列が実列数の範囲外になった場合に末尾列へ寄せる純関数（エッジケース5）。
@@ -64,6 +90,18 @@ export class RemoteViewServer {
   private panelCache: PanelBoundaries | null = null;
   private connectCallback: (() => void) | null = null;
   private disconnectCallback: (() => void) | null = null;
+  // 定期キャプチャタイマー（setTimeoutチェーン方式・接続中のみ動く）。
+  private captureTimer: ReturnType<typeof setTimeout> | null = null;
+  // stopCapture 後の tick 再予約を止める停止フラグ（R-9）。
+  private captureTimerActive = false;
+  // capturing=true 中に captureOnce が呼ばれた場合のペンディングフラグ（R-2）。
+  private pendingCapture = false;
+  // windowId 解決失敗後の次回試行解禁エポックms。null=バックオフなし（R-3）。
+  private nextWindowIdRetryAt: number | null = null;
+  // 前回 screencapture 後の生ファイルハッシュ（第1ゲート・R-4）。
+  private lastRawFrameState: { hash: string; column: number } | null = null;
+  // 前回送信クロップ後フレームの状態（第2ゲート・ハッシュ+列）。同一フレームの再送を避けるため。
+  private lastFrameState: { hash: string; column: number } | null = null;
 
   constructor(password: string, _projectPath: string, allowInput: boolean = true) {
     this.password = password;
@@ -292,23 +330,60 @@ export class RemoteViewServer {
 
   async captureOnce(): Promise<void> {
     if (!this.wss || this.wss.clients.size === 0) return;
-    if (this.capturing) return;
+    // R-2: 実行中の場合はペンディングを立てて return（finally で1回だけ再実行）。
+    if (this.capturing) {
+      this.pendingCapture = true;
+      return;
+    }
+
+    // R-3: windowId 解決。バックオフ抑止中は静かに return。
     if (!this.windowId) {
-      try { this.windowId = getVSCodeWindowId(); } catch { return; }
+      const now = Date.now();
+      if (!shouldAttemptResolve(now, this.nextWindowIdRetryAt)) return;
+      let resolved = "";
+      try {
+        resolved = getVSCodeWindowId();
+      } catch {
+        this.nextWindowIdRetryAt = Date.now() + 10_000;
+        return;
+      }
+      if (!resolved) {
+        this.nextWindowIdRetryAt = Date.now() + 10_000;
+        return;
+      }
+      this.windowId = resolved;
     }
 
     this.capturing = true;
     try {
+      // R-1: 列番号をローカルに束縛し、全段でこの値を使う（await 中の selectColumn 競合を防ぐ）。
+      const column = this.selectedColumn;
+
       // 1. screencapture
-      await new Promise<void>((resolve, reject) => {
-        exec(`screencapture -x -o -l ${this.windowId} -t jpg /tmp/es-frame.jpg`, (err) => err ? reject(err) : resolve());
-      });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          exec(`screencapture -x -o -l ${this.windowId} -t jpg /tmp/es-frame.jpg`, (err) => err ? reject(err) : resolve());
+        });
+      } catch {
+        // R-3: screencapture 失敗はウィンドウ番号失効の可能性。リセットしてバックオフ。
+        this.windowId = null;
+        this.nextWindowIdRetryAt = Date.now() + 10_000;
+        return;
+      }
+
+      // R-4: 第1ゲート（生ファイルハッシュ）。静止ウィンドウの2連写スキップ。
+      // fs.promises.readFile で生バイトをそのまま読む（sharp decode+encode は100ms級・ここでは不要）。
+      const rawBytes = await fs.promises.readFile("/tmp/es-frame.jpg");
+      const rawHash = crypto.createHash("sha1").update(rawBytes).digest("hex");
+      const rawState = { hash: rawHash, column };
+      if (!shouldSendFrame(this.lastRawFrameState, rawState)) return;
+      this.lastRawFrameState = rawState;
 
       // 2. パネル境界検出
       this.panelCache = await detectPanelBoundaries("/tmp/es-frame.jpg");
 
-      // 3. 選択カラムのクロップ＋リサイズ
-      const col = this.panelCache.columns[this.selectedColumn];
+      // 3. 選択カラムのクロップ＋リサイズ（R-1: column ローカルを使う）
+      const col = this.panelCache.columns[column];
       if (col) {
         const buf = await sharp("/tmp/es-frame.jpg")
           .extract({ left: col.left, top: 0, width: col.width, height: this.panelCache.editorBottom })
@@ -316,9 +391,15 @@ export class RemoteViewServer {
           .jpeg({ quality: 80 })
           .toBuffer();
 
-        // 4. Base64送信（column はクライアント側の列タグ判定に使う・B-5）
+        // 4. 第2ゲート: クロップ後ハッシュ（選択列は変わったが映像は同じ場合を除く・R-1: column使用）
+        const hash = crypto.createHash("sha1").update(buf).digest("hex");
+        const nextState = { hash, column };
+        if (!shouldSendFrame(this.lastFrameState, nextState)) return;
+        this.lastFrameState = nextState;
+
+        // 5. Base64送信（column はクライアント側の列タグ判定に使う・B-5・R-1: column使用）
         const base64 = buf.toString("base64");
-        const msg: ServerMessage = { type: "frame", data: "data:image/jpeg;base64," + base64, column: this.selectedColumn };
+        const msg: ServerMessage = { type: "frame", data: "data:image/jpeg;base64," + base64, column };
         const payload = JSON.stringify(msg);
         for (const client of this.wss!.clients) {
           // 失効した接続には編集画面のフレームを送らない（受動的な画面流出を防ぐ）。
@@ -329,11 +410,37 @@ export class RemoteViewServer {
       // skip
     } finally {
       this.capturing = false;
+      // R-2: pending が立っていれば1回だけ再実行（無限化防止のためクリア後に呼ぶ）。
+      if (this.pendingCapture) {
+        this.pendingCapture = false;
+        this.captureOnce();
+      }
     }
   }
 
+  // R-9: setInterval をやめ setTimeout チェーンに変更。
+  // 処理時間が間隔を超えても位相エイリアスしない（実効間隔=処理時間+CAPTURE_INTERVAL_MS）。
+  private startCaptureTimer(): void {
+    if (this.captureTimer) return;
+    const tick = () => {
+      if (!this.captureTimerActive) return;
+      this.captureOnce().finally(() => {
+        if (this.captureTimerActive) {
+          this.captureTimer = setTimeout(tick, CAPTURE_INTERVAL_MS);
+        }
+      });
+    };
+    this.captureTimerActive = true;
+    this.captureTimer = setTimeout(tick, CAPTURE_INTERVAL_MS);
+  }
+
   private stopCapture(): void {
+    this.captureTimerActive = false;
     this.windowId = null;
+    if (this.captureTimer) {
+      clearTimeout(this.captureTimer);
+      this.captureTimer = null;
+    }
   }
 
   private handleClick(x: number, y: number): void {
@@ -353,6 +460,7 @@ export class RemoteViewServer {
     const absX = Math.round(bounds.x + (imgX / (this.panelCache?.imageWidth ?? bounds.width)) * bounds.width);
     const absY = Math.round(bounds.y + (imgY / (this.panelCache?.imageHeight ?? bounds.height)) * bounds.height);
 
+    // R-5: exec 完了コールバック内で captureOnce を呼ぶ（OSにクリックが届いてから撮影）。
     exec(`swift -e '
 import CoreGraphics
 let point = CGPoint(x: ${absX}, y: ${absY})
@@ -360,7 +468,9 @@ let mouseDown = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseC
 let mouseUp = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
 mouseDown?.post(tap: .cghidEventTap)
 mouseUp?.post(tap: .cghidEventTap)
-'`);
+'`, () => {
+      this.captureOnce();
+    });
   }
 
   private getSessionFromCookie(req: http.IncomingMessage): string | null {
@@ -482,9 +592,12 @@ mouseUp?.post(tap: .cghidEventTap)
     // この接続のセッションを記録（失効時にこの接続を閉じるため）。
     this.clientSessions.set(ws, sessionToken as string);
 
-    // 最初のクライアント接続でキャプチャ開始＋コールバック呼び出し
+    // 最初のクライアント接続でキャプチャ開始＋定期タイマー起動＋コールバック呼び出し
     const wasFirstClient = this.wss!.clients.size === 1;
+    // 再接続時は初回フレームを必ず送るためハッシュをリセットする。
+    this.lastFrameState = null;
     this.captureOnce();
+    this.startCaptureTimer();
 
     if (wasFirstClient && this.connectCallback) {
       this.connectCallback();
@@ -529,18 +642,25 @@ mouseUp?.post(tap: .cghidEventTap)
         ) {
           return;
         }
+        // R-5: captureOnce は handleClick 内の exec コールバックで呼ばれる。
         this.handleClick(x, y);
       } else if (message.type === "selectColumn") {
         // カラム選択は画面ナビのみ（ホスト入力ではない）。範囲を検証。
         // 範囲外・型不正の場合も必ずその接続へ現在状態の columns を返して
         // クライアント状態を再同期させる（design 5.2 / ACK 必須契約）。
+        // R-8: 有効・無効どちらの分岐でもハッシュをリセットしてフレームを必達させる。
         const c = message.column;
         if (typeof c !== "number" || !Number.isInteger(c) || c < 0 || c >= this.columnCount) {
+          this.lastRawFrameState = null;
+          this.lastFrameState = null;
           this.sendColumnsTo(ws);
+          this.captureOnce();
           return;
         }
         this.selectedColumn = c;
         this.broadcastColumns();
+        this.lastRawFrameState = null;
+        this.lastFrameState = null;
         this.captureOnce();
       } else if (message.type === "disconnect") {
         // スマホから明示的切断 → 全クライアント閉じてキャプチャ停止+復元

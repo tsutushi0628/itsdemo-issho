@@ -13,7 +13,7 @@ import { generateRemotePassword } from "./remote/tokenAuth";
 import { runInjectionPipeline, createVSCodeInjectionDeps } from "./remote/injectionPipeline";
 import { createVSCodeFocusHost, routeFocusToColumn } from "./remote/focusRouter";
 import { deriveColumnLabels } from "./remote/remoteViewServer";
-import { decideRemoteAccessDisplay, DEFAULT_BIND_ADDRESS } from "./remote/qrPolicy";
+import { decideRemoteAccessDisplay, DEFAULT_BIND_ADDRESS, buildQrUrl } from "./remote/qrPolicy";
 
 // 出荷時に固定で入っていた既知パスワード。設定にこの値が残っている場合は
 // 「未設定」とみなして起動時にランダム生成へ切り替える（既知の弱い資格情報を無効化）。
@@ -727,7 +727,7 @@ async function startRemoteViewServer(
   const port = config.get<number>("remoteView.port", 19280);
   const configuredPassword = config.get<string>("remoteView.password", "");
   // 未設定または旧固定値なら、起動ごとに高エントロピーのワンタイムパスワードを生成。
-  // 生成値はサイドバーUIに表示し、ユーザーがスマホで入力する。
+  // 生成値はQR画像に埋め込まれ、スキャンで自動ログインする（手入力はフォールバック）。
   const password =
     !configuredPassword || configuredPassword === LEGACY_DEFAULT_PASSWORD
       ? generateRemotePassword()
@@ -801,6 +801,9 @@ async function startRemoteViewServer(
       // 注入パイプライン経由で列ルーティング・フォーカス確定検証・束ね検査を実行する。
       // claude-vscode.focus / setTimeout 500ms は撤去済み（要件 a-1, a-2）。
       await runInjectionPipeline(msg.text, injectionDeps);
+      // R-6: 描画フラッシュ待ち 150ms 後にキャプチャ（直後撮影はハッシュ不変スキップになる）。
+      // R-7: 同クロージャ内の `server` を使い、モジュール変数 remoteServer への null ガードをやめる。
+      setTimeout(() => { server.captureOnce(); }, 150);
     } else if (msg.type === "switchTab") {
       const groups = vscode.window.tabGroups.all;
       if (msg.groupIndex < groups.length) {
@@ -816,6 +819,8 @@ async function startRemoteViewServer(
           }
         }
       }
+      // R-11: タブ切替後も type/click と同様に描画フラッシュ待ち 150ms でキャプチャ。
+      setTimeout(() => { server.captureOnce(); }, 150);
     }
   });
 
@@ -855,7 +860,15 @@ async function startRemoteViewServer(
       remoteWebviewProvider.setLocalOnly(accessDisplay.url, password);
     } else {
       const url = accessDisplay.url;
-      const qrSvg = await QRCode.toString(url, { type: "svg" });
+      // QR画像にのみ認証キーをフラグメントとして埋め込む（buildQrUrl が単一真実源）。
+      // サイドバー表示用の url は素のまま変えない。
+      let qrSvg: string;
+      try {
+        qrSvg = await QRCode.toString(buildQrUrl(url, password), { type: "svg" });
+      } catch {
+        // 容量超過等で失敗した場合は鍵なしの素URLで再生成して起動フローを継続する
+        qrSvg = await QRCode.toString(url, { type: "svg" });
+      }
       remoteWebviewProvider.setRunning(qrSvg, url, password);
     }
   }

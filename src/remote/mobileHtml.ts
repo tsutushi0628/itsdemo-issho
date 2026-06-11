@@ -1,3 +1,5 @@
+import { QR_KEY_FRAGMENT_PREFIX } from "./qrPolicy";
+
 export function getMobileHtml(): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -684,6 +686,12 @@ export function getMobileHtml(): string {
     document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-size:16px;color:#6b7280;">Disconnected</div>';
   });
 
+  // Q-1: セッション有効中のQR再スキャン時に鍵フラグメントをアドレスバー・履歴から除去する。
+  // ログインページ側の除去だけでは GET / が本体を直接返す経路で鍵が残留するため。
+  if (location.hash.indexOf('${QR_KEY_FRAGMENT_PREFIX}') === 0) {
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+
   connect();
 })();
 </script>
@@ -759,12 +767,35 @@ export function getLoginHtml(hasError: boolean): string {
 <body>
 <div class="login-card">
   <h1>itsudemo-issho</h1>
-  ${hasError ? '<p class="error">パスワードが違います</p>' : ''}
-  <form method="POST" action="/login">
-    <input type="password" name="password" placeholder="パスワード" autofocus />
+  ${hasError ? '<p class="error">パスワードが違います。QRが古い可能性があります。サイドバーの最新のQRを読み直してください。</p>' : ''}
+  <form method="POST" action="/login" id="loginForm">
+    <input type="password" name="password" id="passwordInput" placeholder="パスワード" autofocus />
     <button type="submit">接続</button>
   </form>
 </div>
+<script>
+(function() {
+  var PREFIX = '${QR_KEY_FRAGMENT_PREFIX}';
+  var hash = location.hash;
+  if (hash.indexOf(PREFIX) === 0) {
+    // Q-2: フラグメント除去を最初に実行（不正エンコードで死んでも鍵が履歴に残らない）
+    history.replaceState(null, '', location.pathname + location.search);
+    var encoded = hash.slice(PREFIX.length);
+    var key;
+    try {
+      key = decodeURIComponent(encoded);
+    } catch (e) {
+      // URIError: 不正エンコードは生値をそのまま使用
+      key = encoded;
+    }
+    // Q-2: 鍵が空文字なら submit しない
+    if (key) {
+      document.getElementById('passwordInput').value = key;
+      document.getElementById('loginForm').submit();
+    }
+  }
+})();
+</script>
 </body>
 </html>`;
 }

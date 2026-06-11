@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { clampSelectedColumn, deriveColumnLabels, RemoteViewServer } from "../remote/remoteViewServer";
+import { clampSelectedColumn, deriveColumnLabels, RemoteViewServer, shouldSendFrame, shouldAttemptResolve } from "../remote/remoteViewServer";
 
 describe("clampSelectedColumn", () => {
   it("選択列が範囲内ならそのまま返す", () => {
@@ -53,6 +53,54 @@ describe("deriveColumnLabels", () => {
       { groupIndex: 0, tabIndex: 0, label: "file-a.ts", isActive: true },
     ];
     expect(deriveColumnLabels(tabs, 0)).toEqual([]);
+  });
+});
+
+describe("shouldSendFrame", () => {
+  it("前回なし（初回）は送信する", () => {
+    expect(shouldSendFrame(null, { hash: "abc123", column: 0 })).toBe(true);
+  });
+
+  it("同一ハッシュ×同一列はスキップする", () => {
+    const prev = { hash: "abc123", column: 0 };
+    const next = { hash: "abc123", column: 0 };
+    expect(shouldSendFrame(prev, next)).toBe(false);
+  });
+
+  it("ハッシュ変化×同一列は送信する", () => {
+    const prev = { hash: "abc123", column: 0 };
+    const next = { hash: "def456", column: 0 };
+    expect(shouldSendFrame(prev, next)).toBe(true);
+  });
+
+  it("同一ハッシュ×列変化は送信する", () => {
+    const prev = { hash: "abc123", column: 0 };
+    const next = { hash: "abc123", column: 1 };
+    expect(shouldSendFrame(prev, next)).toBe(true);
+  });
+
+  it("ハッシュ変化×列変化は送信する", () => {
+    const prev = { hash: "abc123", column: 0 };
+    const next = { hash: "def456", column: 2 };
+    expect(shouldSendFrame(prev, next)).toBe(true);
+  });
+});
+
+describe("shouldAttemptResolve", () => {
+  it("nextRetryAt が null（バックオフなし）は解決を試みる", () => {
+    expect(shouldAttemptResolve(Date.now(), null)).toBe(true);
+  });
+
+  it("バックオフ抑止中（now < nextRetryAt）は解決を試みない", () => {
+    const now = 1000;
+    const nextRetryAt = 2000;
+    expect(shouldAttemptResolve(now, nextRetryAt)).toBe(false);
+  });
+
+  it("バックオフ期限後（now >= nextRetryAt）は解決を試みる", () => {
+    const now = 2000;
+    const nextRetryAt = 2000;
+    expect(shouldAttemptResolve(now, nextRetryAt)).toBe(true);
   });
 });
 
