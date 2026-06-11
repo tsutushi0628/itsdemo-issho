@@ -4,7 +4,7 @@ import { exec } from "child_process";
 import QRCode from "qrcode";
 import { detectWindowWidth } from "./windowDetector";
 import { computeActiveColumns, deriveEditorWidth } from "./columnCalculator";
-import { calculateLayout, applyLayout, LayoutConfig } from "./layoutEngine";
+import { calculateLayout, applyLayout, readBackLayout, layoutMatches, LayoutConfig, EditorLayout } from "./layoutEngine";
 import { decideSidebarTargetState, SidebarTargetState } from "./sidebarPolicy";
 import { TabTreeProvider } from "./tabTreeProvider";
 import { RemoteViewServer } from "./remote/remoteViewServer";
@@ -180,6 +180,48 @@ export async function activate(
       });
   };
 
+  // 適用が VS Code 側グリッドへ反映されたかを読み戻しで検証し、不一致なら段階的に
+  // 自己回復する。ディスプレイ切替後にグリッドが旧ウィンドウ幅のまま固まり、適用
+  // しても右端の列が画面外へはみ出したまま見えなくなる実害（2026-06-11）への対処。
+  const LAYOUT_MATCH_TOLERANCE = 0.05;
+  const LAYOUT_RECOVERY_MIN_INTERVAL_MS = 30000;
+  let lastLayoutRecoveryAt = 0;
+  const verifyAndRecoverLayout = async (layout: EditorLayout): Promise<void> => {
+    const first = await readBackLayout();
+    if (first === undefined) {
+      // 読み戻し非対応環境では検証せず従来挙動のまま進める
+      return;
+    }
+    if (layoutMatches(layout, first, LAYOUT_MATCH_TOLERANCE)) {
+      return;
+    }
+    // 回復が効かない環境でフォーカスのたびにサイドバーが点滅し続けるのを防ぐ
+    if (Date.now() - lastLayoutRecoveryAt < LAYOUT_RECOVERY_MIN_INTERVAL_MS) {
+      log(`[apply-verify-fail] recovery cooldown中のためスキップ`);
+      return;
+    }
+    lastLayoutRecoveryAt = Date.now();
+    log(`[apply-verify-fail] actual=${JSON.stringify(first.groups.map(g => g.size))} -> evenEditorWidthsで回復試行`);
+    await vscode.commands.executeCommand("workbench.action.evenEditorWidths");
+    await applyLayout(layout);
+    if (layoutMatches(layout, await readBackLayout(), LAYOUT_MATCH_TOLERANCE)) {
+      log(`[apply-verify-recovered] evenEditorWidths`);
+      return;
+    }
+    // サイドバーを2回トグルしてワークベンチ全体の再レイアウトを誘発し、グリッドを
+    // 実ウィンドウ幅へ追従させてから再適用する
+    await vscode.commands.executeCommand("workbench.action.toggleSidebarVisibility");
+    await vscode.commands.executeCommand("workbench.action.toggleSidebarVisibility");
+    await vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup");
+    await applyLayout(layout);
+    const final = await readBackLayout();
+    if (layoutMatches(layout, final, LAYOUT_MATCH_TOLERANCE)) {
+      log(`[apply-verify-recovered] sidebar-relayout`);
+    } else {
+      log(`[apply-verify-fail] persists actual=${JSON.stringify(final?.groups.map(g => g.size))}`);
+    }
+  };
+
   const onFocusChange = () => {
     if (!enabled) {
       return;
@@ -269,8 +311,10 @@ export async function activate(
       applyingLayout = true;
       try {
         await applyLayout(layout);
+        await verifyAndRecoverLayout(layout);
         lastLayoutSignature = signature;
       } catch (error) {
+        log(`[apply-error] ${(error as Error).message}`);
         vscode.window.showWarningMessage(
           `Editor Spotlighter: レイアウト適用に失敗しました。(${(error as Error).message})`
         );

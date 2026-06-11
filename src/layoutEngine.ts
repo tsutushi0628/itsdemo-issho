@@ -75,3 +75,44 @@ export async function applyLayout(layout: EditorLayout): Promise<void> {
     layout
   );
 }
+
+export async function readBackLayout(): Promise<EditorLayout | undefined> {
+  try {
+    return (await vscode.commands.executeCommand(
+      "vscode.getEditorLayout"
+    )) as EditorLayout;
+  } catch {
+    return undefined;
+  }
+}
+
+// 適用要求と読み戻し結果の比率一致を判定する。
+// setEditorLayout は相対比率、getEditorLayout は実ピクセルを返すため、
+// 双方を合計1に正規化してから比較する（ディスプレイ切替直後に VS Code 側
+// グリッドが旧幅のまま適用を反映しない実害があり、その検出に使う）。
+export function layoutMatches(
+  requested: EditorLayout,
+  actual: EditorLayout | undefined,
+  tolerance: number
+): boolean {
+  if (!actual || !Array.isArray(actual.groups)) {
+    return false;
+  }
+  if (actual.groups.length !== requested.groups.length) {
+    return false;
+  }
+  const normalize = (groups: { size?: number }[]): number[] | undefined => {
+    const sizes = groups.map(g => g.size ?? 0);
+    const total = sizes.reduce((a, b) => a + b, 0);
+    if (!(total > 0)) {
+      return undefined;
+    }
+    return sizes.map(s => s / total);
+  };
+  const req = normalize(requested.groups);
+  const act = normalize(actual.groups);
+  if (!req || !act) {
+    return false;
+  }
+  return req.every((r, i) => Math.abs(r - act[i]) <= tolerance);
+}

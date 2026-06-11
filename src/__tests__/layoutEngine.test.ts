@@ -6,7 +6,7 @@ vi.mock("vscode", () => ({
   },
 }));
 
-import { calculateLayout } from "../layoutEngine";
+import { calculateLayout, layoutMatches } from "../layoutEngine";
 import type { LayoutConfig } from "../layoutEngine";
 import { computeActiveColumns, deriveEditorWidth } from "../columnCalculator";
 
@@ -340,5 +340,39 @@ describe("27インチ運用 業務意図シナリオ", () => {
       expect(group.size).toBeCloseTo(expectedSize);
       expect(group.size * editorWidth).toBeGreaterThanOrEqual(MIN_ACTIVE_WIDTH);
     }
+  });
+});
+
+describe("layoutMatches（適用結果の読み戻し検証）", () => {
+  const fiveCols = (sizes: number[]) => ({
+    orientation: 0,
+    groups: sizes.map(size => ({ groups: [{}] as [Record<string, never>], size })),
+  });
+
+  it("要求比率どおりに反映された読み戻し（ピクセル値）は一致と判定する", () => {
+    // 要求は比率、読み戻しは実ピクセル。正規化して比較できること
+    const requested = fiveCols([0.163, 0.163, 0.348, 0.163, 0.163]);
+    const actual = fiveCols([240, 240, 512, 240, 240]);
+    expect(layoutMatches(requested, actual, 0.05)).toBe(true);
+  });
+
+  it("ディスプレイ切替後の未反映グリッド（右端列が画面外）は不一致と判定する", () => {
+    // 実害事例: 外部モニタ時代の幅のまま4・5列目がはみ出した状態
+    const requested = fiveCols([0.163, 0.163, 0.348, 0.163, 0.163]);
+    const stale = fiveCols([220, 220, 1029.67, 220, 220]);
+    expect(layoutMatches(requested, stale, 0.05)).toBe(false);
+  });
+
+  it("VS Codeの最小幅クランプ程度の誤差は一致として扱う（過剰回復の防止）", () => {
+    // 実領域が見積りよりやや狭く、非アクティブ列が220pxへクランプされた場合
+    const requested = fiveCols([0.163, 0.163, 0.348, 0.163, 0.163]);
+    const clamped = fiveCols([220, 220, 420, 220, 220]);
+    expect(layoutMatches(requested, clamped, 0.05)).toBe(true);
+  });
+
+  it("読み戻しがグループ数すら違う・取得不能なら不一致と判定する", () => {
+    const requested = fiveCols([0.2, 0.2, 0.2, 0.2, 0.2]);
+    expect(layoutMatches(requested, fiveCols([0.5, 0.5]), 0.05)).toBe(false);
+    expect(layoutMatches(requested, undefined, 0.05)).toBe(false);
   });
 });
