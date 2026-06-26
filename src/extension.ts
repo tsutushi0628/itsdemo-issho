@@ -4,7 +4,7 @@ import { exec } from "child_process";
 import QRCode from "qrcode";
 import { detectWindowWidth } from "./windowDetector";
 import { computeActiveColumns, deriveEditorWidth } from "./columnCalculator";
-import { calculateLayout, applyLayout, readBackLayout, layoutMatches, LayoutConfig, EditorLayout } from "./layoutEngine";
+import { applyLayout, readBackLayout, layoutMatches, LayoutConfig, EditorLayout, buildRowsPerColumn, groupIndexToColumn, totalGroupCount, calculateGridLayout, layoutSignature } from "./layoutEngine";
 import { decideSidebarTargetState, SidebarTargetState } from "./sidebarPolicy";
 import { TabTreeProvider } from "./tabTreeProvider";
 import { RemoteViewServer } from "./remote/remoteViewServer";
@@ -124,28 +124,36 @@ export async function activate(
   // activate時にタブ設定を初期反映
   await applyTabSettings(config);
 
-  let totalColumns = config.get<number>("totalColumns", 5);
+  // 列数・段数・左フル列数（行列プリセット）。columns は横の列数、rows は各列の段数、
+  // fullHeightColumns は左から縦フル（1段）にする列数。rowsPerColumn と groupToColumn は
+  // これらから導出し、設定変更のたびに作り直す。
+  let columns = config.get<number>("columns", 4);
+  let rows = config.get<number>("rows", 2);
+  let fullHeightColumns = config.get<number>("fullHeightColumns", 1);
   let minColumnWidth = config.get<number>("minColumnWidth", 460);
   let fullWidthThreshold = config.get<number>("fullWidthThreshold", 3000);
   let maxActiveColumns = config.get<number>("maxActiveColumns", 2);
   sidebarWidthWhenOpen = config.get<number>("sidebarWidthWhenOpen", 230);
 
+  let rowsPerColumn = buildRowsPerColumn(columns, rows, fullHeightColumns);
+  let groupToColumn = groupIndexToColumn(rowsPerColumn);
+
   let activeColumns: number;
   let windowWidth: number;
 
   try {
-    const info = await recalculateActiveColumns(totalColumns, minColumnWidth, fullWidthThreshold, maxActiveColumns);
+    const info = await recalculateActiveColumns(columns, minColumnWidth, fullWidthThreshold, maxActiveColumns);
     activeColumns = info.activeColumns;
     windowWidth = info.windowWidth;
   } catch (error) {
-    activeColumns = totalColumns;
-    windowWidth = totalColumns * minColumnWidth;
+    activeColumns = columns;
+    windowWidth = columns * minColumnWidth;
     vscode.window.showWarningMessage(
       `Editor Spotlighter: ウィンドウ幅検出に失敗したため等間隔モードで動作します。(${(error as Error).message})`
     );
   }
 
-  log(`[init] activeColumns=${activeColumns}, totalColumns=${totalColumns}, minColumnWidth=${minColumnWidth}, windowWidth=${windowWidth}, sidebarOpenWidth=${sidebarWidthWhenOpen}`);
+  log(`[init] activeColumns=${activeColumns}, columns=${columns}, rows=${rows}, fullHeightColumns=${fullHeightColumns}, minColumnWidth=${minColumnWidth}, windowWidth=${windowWidth}, sidebarOpenWidth=${sidebarWidthWhenOpen}`);
 
   await syncSidebarToActiveColumns(activeColumns);
 
@@ -263,29 +271,34 @@ export async function activate(
       }
       // アクティブ本数はキャッシュ済みのウィンドウ幅から即時計算する（実測を
       // ここで待たない）。実測は裏で走らせ、幅が変わっていた時だけ再整形が入る。
+      // 判定軸は「列」。段（行）は列幅に影響しないため columns だけで決める。
       const editorWidthForCount = deriveEditorWidth(windowWidth, sidebarWidthWhenOpen, EDITOR_CHROME_MARGIN);
-      activeColumns = computeActiveColumns(editorWidthForCount, minColumnWidth, totalColumns, fullWidthThreshold, maxActiveColumns);
+      activeColumns = computeActiveColumns(editorWidthForCount, minColumnWidth, columns, fullWidthThreshold, maxActiveColumns);
       refreshWindowWidthInBackground();
 
       await syncSidebarToActiveColumns(activeColumns);
 
-      log(`[focus] activeColumns=${activeColumns}, totalColumns=${totalColumns}, groups=${allGroups.length}, focused=${focusedGroupIndex}, windowWidth=${windowWidth}, minColumnWidth=${minColumnWidth}, historyLen=${activeHistory.length}, history=[${activeHistory.join(',')}]`);
+      // フォーカスされた実グループが、グリッドのどの「列」に属するかへ写像する。
+      // 段（行）違いでも同じ列なら同じ列を広げる。
+      const totalGroups = totalGroupCount(rowsPerColumn);
+      const focusedColumn = focusedGroupIndex >= 0 ? groupToColumn[focusedGroupIndex] : -1;
+
+      log(`[focus] activeColumns=${activeColumns}, columns=${columns}, rows=${rows}, fullHeightColumns=${fullHeightColumns}, totalGroups=${totalGroups}, groups=${allGroups.length}, focused=${focusedGroupIndex}, focusedColumn=${focusedColumn}, windowWidth=${windowWidth}, minColumnWidth=${minColumnWidth}, historyLen=${activeHistory.length}, history=[${activeHistory.join(',')}]`);
 
       if (focusedGroupIndex < 0) {
         return;
       }
 
-      // レイアウトモデルは totalColumns 列の固定格子。それを超える実グループに
+      // レイアウトモデルは columns 列のグリッド。それを超える実グループに
       // フォーカスがある間は格子で表現できないため、レイアウトを触らない。
-      if (focusedGroupIndex >= totalColumns) {
-        log(`[apply-layout-skip] focused=${focusedGroupIndex} exceeds totalColumns=${totalColumns}`);
+      if (focusedGroupIndex >= totalGroups || focusedColumn === undefined || focusedColumn < 0) {
+        log(`[apply-layout-skip] focused=${focusedGroupIndex} exceeds totalGroups=${totalGroups}`);
         return;
       }
 
-      // グループ削減後に残った範囲外の履歴を捨て（範囲外indexが混ざると比率の合計が
-      // 1を割り、VS Code側の再正規化で幅が崩れる）、既にアクティブなら先頭へ移動
-      activeHistory = activeHistory.filter(i => i < totalColumns && i !== focusedGroupIndex);
-      activeHistory.unshift(focusedGroupIndex);
+      // 履歴は「列 index」で持つ。範囲外（列削減後）を捨て、既にアクティブなら先頭へ移動。
+      activeHistory = activeHistory.filter(i => i < columns && i !== focusedColumn);
+      activeHistory.unshift(focusedColumn);
       // activeColumns数を超えたら古いものを押し出す
       if (activeHistory.length > activeColumns) {
         activeHistory = activeHistory.slice(0, activeColumns);
@@ -294,26 +307,27 @@ export async function activate(
       // 全カラムアクティブ（ウルトラワイド・等間隔モード）では履歴に依らず全列を
       // アクティブ扱いにして等間隔を適用する。従来はここで return しており、
       // 画面切替やグループ開閉で偏った幅が放置されていた（手動整形54回の実害）。
-      const activeIndices = activeColumns >= totalColumns
-        ? new Set(Array.from({ length: totalColumns }, (_, i) => i))
+      const activeIndices = activeColumns >= columns
+        ? new Set(Array.from({ length: columns }, (_, i) => i))
         : new Set(activeHistory);
 
-      // アコーディオン適用（常にtotalColumnsを使う）
+      // アコーディオンで列幅を決め（常に columns を使う）、各列を段数で縦分割した
+      // グリッドへ包む。左フル列は 1 段、残りは rows 段。
       const effectiveSidebarWidth = getEffectiveSidebarWidth();
       const editorWidth = deriveEditorWidth(windowWidth, effectiveSidebarWidth, EDITOR_CHROME_MARGIN);
       const layoutConfig: LayoutConfig = {
-        totalColumns,
+        totalColumns: columns,
         windowWidth: editorWidth,  // エディタ領域の幅
         minColumnWidth,
       };
 
-      const layout = calculateLayout(layoutConfig, activeIndices);
+      const layout = calculateGridLayout(layoutConfig, activeIndices, rowsPerColumn);
       const sizes = layout.groups.map((g, i) => {
         const pxEstimate = Math.round(g.size * editorWidth);
         const isActive = activeIndices.has(i);
-        return `col${i}=${(g.size * 100).toFixed(1)}%(${pxEstimate}px)${isActive ? '*' : ''}`;
+        return `col${i}=${(g.size * 100).toFixed(1)}%(${pxEstimate}px)x${g.groups.length}段${isActive ? '*' : ''}`;
       }).join(', ');
-      const signature = layout.groups.map(g => g.size.toFixed(4)).join('|');
+      const signature = layoutSignature(layout);
       if (signature === lastLayoutSignature) {
         log(`[apply-layout-skip] unchanged signature=${signature}`);
         return;
@@ -375,7 +389,7 @@ export async function activate(
     vscode.commands.registerCommand("editorSpotlighter.toggle", async () => {
       enabled = !enabled;
       if (!enabled) {
-        await resetToEqual(totalColumns);
+        await resetToEqual(columns, rowsPerColumn);
       }
       let statusText: string;
       if (enabled) {
@@ -394,8 +408,8 @@ export async function activate(
       "editorSpotlighter.setColumns",
       async () => {
         const input = await vscode.window.showInputBox({
-          prompt: "カラム数を入力してください",
-          value: String(totalColumns),
+          prompt: "列数を入力してください",
+          value: String(columns),
         });
         if (input === undefined) {
           return;
@@ -407,31 +421,89 @@ export async function activate(
           );
           return;
         }
-        totalColumns = parsed;
-        if (activeColumns > totalColumns) {
-          activeColumns = totalColumns;
-        }
-        // 履歴もリセット（全カラムをアクティブ扱いに）
-        activeHistory = [];
+        // 設定を書き換えると onDidChangeConfiguration 経由で
+        // columns / rowsPerColumn / groupToColumn と再レイアウトが走る。
         await vscode.workspace.getConfiguration("editorSpotlighter").update(
-          "totalColumns",
-          totalColumns,
+          "columns",
+          parsed,
           vscode.ConfigurationTarget.Global
         );
-        onFocusChange();
+      }
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "editorSpotlighter.chooseLayoutPreset",
+      async () => {
+        // 行列プリセット。選ぶと columns / rows / fullHeightColumns を一括で書き換え、
+        // onDidChangeConfiguration 経由で再レイアウトが走る。
+        interface PresetItem extends vscode.QuickPickItem {
+          preset?: { columns: number; rows: number; fullHeightColumns: number };
+          custom?: boolean;
+        }
+        const items: PresetItem[] = [
+          { label: "4 × 2（左1列フル・既定）", description: "左端を編集用に縦フル＋3列が2段＝7ペイン", preset: { columns: 4, rows: 2, fullHeightColumns: 1 } },
+          { label: "3 × 2（左1列フル）", description: "左フル＋2列が2段＝5ペイン", preset: { columns: 3, rows: 2, fullHeightColumns: 1 } },
+          { label: "2 × 2", description: "2列×2段＝4ペイン（左フルなし）", preset: { columns: 2, rows: 2, fullHeightColumns: 0 } },
+          { label: "3 × 3（左1列フル）", description: "左フル＋2列が3段＝7ペイン", preset: { columns: 3, rows: 3, fullHeightColumns: 1 } },
+          { label: "5 × 1（従来の1段）", description: "横5列・段なし（従来のスポットライト）", preset: { columns: 5, rows: 1, fullHeightColumns: 0 } },
+          { label: "カスタム…", description: "列数・段数・左フル列数を入力", custom: true },
+        ];
+        const picked = await vscode.window.showQuickPick(items, {
+          placeHolder: `現在: ${columns}列 × ${rows}段・左フル${fullHeightColumns}列`,
+        });
+        if (!picked) {
+          return;
+        }
+
+        let next: { columns: number; rows: number; fullHeightColumns: number };
+        if (picked.custom) {
+          const askInt = async (prompt: string, value: number, min: number): Promise<number | undefined> => {
+            const input = await vscode.window.showInputBox({
+              prompt,
+              value: String(value),
+              validateInput: (v) => {
+                const n = parseInt(v, 10);
+                return isNaN(n) || n < min ? `${min}以上の整数を入力してください` : undefined;
+              },
+            });
+            if (input === undefined) {
+              return undefined;
+            }
+            return parseInt(input, 10);
+          };
+          const c = await askInt("列数（横方向）", columns, 1);
+          if (c === undefined) { return; }
+          const r = await askInt("段数（各列を縦に何分割）", rows, 1);
+          if (r === undefined) { return; }
+          const fh = await askInt("左端から縦フル（1段）にする列数", Math.min(fullHeightColumns, c), 0);
+          if (fh === undefined) { return; }
+          next = { columns: c, rows: r, fullHeightColumns: Math.min(fh, c) };
+        } else {
+          next = picked.preset!;
+        }
+
+        const cfg = vscode.workspace.getConfiguration("editorSpotlighter");
+        await cfg.update("columns", next.columns, vscode.ConfigurationTarget.Global);
+        await cfg.update("rows", next.rows, vscode.ConfigurationTarget.Global);
+        await cfg.update("fullHeightColumns", next.fullHeightColumns, vscode.ConfigurationTarget.Global);
+        vscode.window.showInformationMessage(
+          `Editor Spotlighter: レイアウトを ${next.columns}列 × ${next.rows}段（左フル${next.fullHeightColumns}列）にしました`
+        );
       }
     )
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("editorSpotlighter.resetLayout", async () => {
-      await resetToEqual(totalColumns, verifyAndRecoverLayout);
+      await resetToEqual(columns, rowsPerColumn, verifyAndRecoverLayout);
     })
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("editorSpotlighter.alignLayout", async () => {
-      await resetToEqual(totalColumns, verifyAndRecoverLayout);
+      await resetToEqual(columns, rowsPerColumn, verifyAndRecoverLayout);
       // 履歴もリセット（全カラムをアクティブ扱いに）
       activeHistory = [];
       vscode.window.showInformationMessage(
@@ -620,11 +692,16 @@ export async function activate(
       }
       const updated = vscode.workspace.getConfiguration("editorSpotlighter");
       enabled = updated.get<boolean>("enabled", true);
-      totalColumns = updated.get<number>("totalColumns", 5);
+      columns = updated.get<number>("columns", 4);
+      rows = updated.get<number>("rows", 2);
+      fullHeightColumns = updated.get<number>("fullHeightColumns", 1);
       minColumnWidth = updated.get<number>("minColumnWidth", 460);
       fullWidthThreshold = updated.get<number>("fullWidthThreshold", 3000);
       maxActiveColumns = updated.get<number>("maxActiveColumns", 2);
       sidebarWidthWhenOpen = updated.get<number>("sidebarWidthWhenOpen", 230);
+      // 列数・段数・左フル列数の変更を段構成へ反映する。
+      rowsPerColumn = buildRowsPerColumn(columns, rows, fullHeightColumns);
+      groupToColumn = groupIndexToColumn(rowsPerColumn);
 
       if (remoteServer && mobileConnected) {
         // 設定変更時も実グループ数ベースで再同期（要件 b-3）
@@ -667,35 +744,38 @@ export async function deactivate(): Promise<void> {
   await stopRemoteViewServer();
 
   const config = vscode.workspace.getConfiguration("editorSpotlighter");
-  const totalColumns = config.get<number>("totalColumns", 5);
-  await resetToEqual(totalColumns);
+  const columns = config.get<number>("columns", 4);
+  const rows = config.get<number>("rows", 2);
+  const fullHeightColumns = config.get<number>("fullHeightColumns", 1);
+  await resetToEqual(columns, buildRowsPerColumn(columns, rows, fullHeightColumns));
 }
 
 async function resetToEqual(
-  totalColumns: number,
+  columns: number,
+  rowsPerColumn: number[],
   // ユーザー起動の整形コマンドからは読み戻し検証を渡す（固着グリッドでの無音
   // 空振り防止）。無効化・終了時の後始末では渡さず従来挙動のまま戻す。
   verify?: (layout: import("./layoutEngine").EditorLayout) => Promise<boolean>
 ): Promise<void> {
   const allIndices = new Set<number>();
-  for (let i = 0; i < totalColumns; i++) {
+  for (let i = 0; i < columns; i++) {
     allIndices.add(i);
   }
   const layoutConfig: LayoutConfig = {
-    totalColumns,
+    totalColumns: columns,
     windowWidth: 1,
     minColumnWidth: 1,
   };
-  const layout = calculateLayout(layoutConfig, allIndices);
-  const sizes = layout.groups.map((g, i) => `col${i}=${(g.size * 100).toFixed(1)}%`).join(', ');
+  const layout = calculateGridLayout(layoutConfig, allIndices, rowsPerColumn);
+  const sizes = layout.groups.map((g, i) => `col${i}=${(g.size * 100).toFixed(1)}%x${g.groups.length}段`).join(', ');
   const fs = require("fs");
-  try { fs.appendFileSync("/tmp/editor-spotlighter-debug.log", `${new Date(Date.now() + 9*60*60*1000).toISOString().replace('T',' ').replace('Z',' JST')} [reset-equal] totalColumns=${totalColumns}, sizes=[${sizes}]
+  try { fs.appendFileSync("/tmp/editor-spotlighter-debug.log", `${new Date(Date.now() + 9*60*60*1000).toISOString().replace('T',' ').replace('Z',' JST')} [reset-equal] columns=${columns}, sizes=[${sizes}]
 `); } catch {}
   applyingLayout = true;
   try {
     await applyLayout(layout);
     if (!verify || await verify(layout)) {
-      lastLayoutSignature = layout.groups.map(g => g.size.toFixed(4)).join('|');
+      lastLayoutSignature = layoutSignature(layout);
     }
   } finally {
     setTimeout(() => { applyingLayout = false; }, SUPPRESS_EVENT_MS);

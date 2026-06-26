@@ -7,7 +7,9 @@ export interface LayoutConfig {
 }
 
 export interface EditorLayoutLeaf {
-  groups: [Record<string, never>];
+  // 1セル=長さ1（縦フル）、N段=長さN（縦にN分割）。VS Code は inner の size 省略時に
+  // 段を均等分割する。上位 orientation の直交方向（横並び列なら縦）に割れる。
+  groups: Record<string, never>[];
   size: number;
 }
 
@@ -63,6 +65,79 @@ export function calculateLayout(
   }
 
   return { orientation: 0, groups };
+}
+
+// ---- グリッド（行列プリセット）---------------------------------------------
+// 設計: 上位 orientation は従来どおり横並び（列）。各列を「段数」で縦分割する。
+// 列の横幅は calculateLayout がそのまま決め（アコーディオンも列軸で従来どおり効く）、
+// 段は均等。左端 fullHeightColumns 列だけ 1 段（縦フル）にして編集用に確保する。
+
+// 列ごとの段数を返す。左から fullHeightColumns 列は 1 段、残りは rows 段。
+// 例: buildRowsPerColumn(4, 2, 1) = [1, 2, 2, 2]（左1列フル＋3列が2段）。
+export function buildRowsPerColumn(
+  columns: number,
+  rows: number,
+  fullHeightColumns: number
+): number[] {
+  const cols = Math.max(1, Math.floor(columns));
+  const r = Math.max(1, Math.floor(rows));
+  const fh = Math.min(cols, Math.max(0, Math.floor(fullHeightColumns)));
+  const result: number[] = [];
+  for (let i = 0; i < cols; i++) {
+    result.push(i < fh ? 1 : r);
+  }
+  return result;
+}
+
+// グリッド全体のエディタ群（セル）総数。
+export function totalGroupCount(rowsPerColumn: number[]): number {
+  return rowsPerColumn.reduce((sum, n) => sum + n, 0);
+}
+
+// フラットなグループ index（VS Code の tabGroups.all / focusNthEditorGroup の採番）から
+// 所属する列 index への写像。VS Code はグリッドのグループを groups 配列の深さ優先順で
+// 採番するため、wrapColumnsIntoGrid が並べる順（列0の全段→列1の全段…）と一致する。
+// 例: groupIndexToColumn([1,2,2,2]) = [0, 1,1, 2,2, 3,3]。
+export function groupIndexToColumn(rowsPerColumn: number[]): number[] {
+  const map: number[] = [];
+  rowsPerColumn.forEach((rowCount, col) => {
+    for (let r = 0; r < rowCount; r++) {
+      map.push(col);
+    }
+  });
+  return map;
+}
+
+// 単段の列幅レイアウト（calculateLayout の出力）を、列ごとの段数で縦分割した
+// グリッドへ包む。各列の横幅比率（size）は据え置き、段は均等分割（inner size 省略）。
+export function wrapColumnsIntoGrid(
+  columnLayout: EditorLayout,
+  rowsPerColumn: number[]
+): EditorLayout {
+  const groups: EditorLayoutLeaf[] = columnLayout.groups.map((col, i) => {
+    const rowCount = Math.max(1, rowsPerColumn[i] ?? 1);
+    const inner: Record<string, never>[] = Array.from({ length: rowCount }, () => ({}));
+    return { groups: inner, size: col.size };
+  });
+  return { orientation: columnLayout.orientation, groups };
+}
+
+// 列数・段数・左フル列数からグリッドレイアウトを一括生成する。
+// activeColumnIndices は「横に広げる列」（アコーディオン）。空集合や全列指定で等間隔。
+export function calculateGridLayout(
+  config: LayoutConfig,
+  activeColumnIndices: Set<number>,
+  rowsPerColumn: number[]
+): EditorLayout {
+  const columnLayout = calculateLayout(config, activeColumnIndices);
+  return wrapColumnsIntoGrid(columnLayout, rowsPerColumn);
+}
+
+// 「同じレイアウトなら再適用しない」同一性キー。段構成（inner 長）と列幅比率の両方を含める。
+// 適用側（onFocusChange）と整形側（resetToEqual）で必ず同じ式を使うため正本をここに置く
+// （式が片方だけズレると、整えた直後のフォーカスが誤って『変化なし』スキップに吸われ崩れが固定される）。
+export function layoutSignature(layout: EditorLayout): string {
+  return layout.groups.map(g => `${g.groups.length}:${g.size.toFixed(4)}`).join('|');
 }
 
 export async function applyLayout(layout: EditorLayout): Promise<void> {

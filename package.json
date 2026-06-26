@@ -63,10 +63,28 @@
     "configuration": {
       "title": "Editor Spotlighter",
       "properties": {
+        "editorSpotlighter.columns": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "description": "列数（横方向のカラム数）。既定は4。コマンド「Choose Layout Preset」で行列をまとめて切り替えできます"
+        },
+        "editorSpotlighter.rows": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "description": "段数（各列を縦に何分割するか）。既定は2。左端の編集用フル列はこの段数の対象外です"
+        },
+        "editorSpotlighter.fullHeightColumns": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "description": "左端から何列を縦フル（1段）にするか。既定は1（左端1列を編集用に縦いっぱい使う）。0で全列を段数どおりに分割します"
+        },
         "editorSpotlighter.totalColumns": {
           "type": "number",
           "default": 5,
-          "description": "総カラム数"
+          "description": "（非推奨）旧・総カラム数。現在は columns / rows / fullHeightColumns で指定します"
         },
         "editorSpotlighter.minColumnWidth": {
           "type": "number",
@@ -146,6 +164,10 @@
       {
         "command": "editorSpotlighter.setColumns",
         "title": "Editor Spotlighter: Set Column Count"
+      },
+      {
+        "command": "editorSpotlighter.chooseLayoutPreset",
+        "title": "Editor Spotlighter: Choose Layout Preset"
       },
       {
         "command": "editorSpotlighter.resetLayout",
