@@ -3,3 +3,7 @@ dist/
 *.vsix
 .wasurenagusa/
 .mcp.json
+
+.claude
+
+.tmp/
