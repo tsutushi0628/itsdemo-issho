@@ -36,5 +36,5 @@ source_worklog: handoff-20260611-steering-readme-refresh.md
 - VS Code Marketplace非公開。`npm run package`のvsceはグローバル/npx前提で依存関係に未掲載。
 
 ## 6. 根拠となる最近の記録
-- [handoff-20260611-steering-readme-refresh](findings/handoff-20260611-steering-readme-refresh.md)
-- [handoff-20260611-qr-autologin-and-screen-refresh](findings/handoff-20260611-qr-autologin-and-screen-refresh.md)
+- [handoff-20260611-steering-readme-refresh](../../s.t.findings/editor-spotlighter/202606/handoff-20260611-steering-readme-refresh.md)
+- [handoff-20260611-qr-autologin-and-screen-refresh](../../s.t.findings/editor-spotlighter/202606/handoff-20260611-qr-autologin-and-screen-refresh.md)
